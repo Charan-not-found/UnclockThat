@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.router import api_router
-from backend.app.core.config import get_settings
+from backend.app.core.config import BASE_DIR, get_settings
 from backend.app.core.logging import setup_logging
 from backend.app.database.connection import init_db
 
@@ -22,7 +22,7 @@ async def lifespan(_app: FastAPI):
     setup_logging(settings.log_level)
     init_db()
     # Ensure storage dirs exist
-    for sub in ("uploads", "inspection_results", "reports", "temporary"):
+    for sub in ("uploads", "inspection_results", "temporary"):
         (settings.storage_root / sub).mkdir(parents=True, exist_ok=True)
     yield
 
@@ -59,6 +59,11 @@ def create_app() -> FastAPI:
     results_dir = settings.storage_root / "inspection_results"
     results_dir.mkdir(parents=True, exist_ok=True)
     application.mount("/results", StaticFiles(directory=str(results_dir)), name="results")
+
+    outputs_dir = BASE_DIR / "outputs"
+    (outputs_dir / "visualizations").mkdir(parents=True, exist_ok=True)
+    (outputs_dir / "reports").mkdir(parents=True, exist_ok=True)
+    application.mount("/outputs", StaticFiles(directory=str(outputs_dir)), name="outputs")
 
     return application
 

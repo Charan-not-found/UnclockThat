@@ -184,8 +184,8 @@ export default function Dashboard() {
         ) : (
           <EmptyState
             title="No inspections yet"
-            body="Submit your first inspection to populate this table."
-            action={<Link to="/inspect" className="text-sm text-blue-600 hover:underline">Go to New Inspection →</Link>}
+            body="Submit your first test sample to populate this table."
+            action={<Link to="/test-sample" className="text-sm text-blue-600 hover:underline">Go to Test Sample →</Link>}
           />
         )}
       </section>

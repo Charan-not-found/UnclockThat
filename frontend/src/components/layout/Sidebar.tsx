@@ -1,28 +1,26 @@
 import { NavLink } from 'react-router-dom'
 import {
-  LayoutDashboard, ScanSearch, ClipboardList, GitBranch, Cpu,
-  Database, Dumbbell, BarChart3, Settings, Bell, Shield,
+  LayoutDashboard, FlaskConical, ClipboardList, Cpu,
+  Database, Dumbbell, BarChart3, Settings, Bell, Shield, Layers,
 } from 'lucide-react'
 
 const NAV = [
   { section: 'Inspect', items: [
-    { to: '/',          label: 'Overview',          icon: LayoutDashboard  },
-    { to: '/inspect',   label: 'New Inspection',    icon: ScanSearch       },
-    { to: '/history',   label: 'Inspection History',icon: ClipboardList    },
-    { to: '/review',    label: 'Review Queue',      icon: Bell             },
+    { to: '/',            label: 'Overview',           icon: LayoutDashboard },
+    { to: '/scanners',    label: 'Scanner Units',      icon: Layers          },
+    { to: '/test-sample', label: 'Test Sample',        icon: FlaskConical    },
+    { to: '/history',     label: 'Inspection History', icon: ClipboardList   },
+    { to: '/review',      label: 'Review Queue',       icon: Bell            },
   ]},
-  { section: 'Configure', items: [
-    { to: '/pipelines', label: 'Pipelines',         icon: GitBranch        },
-    { to: '/models',    label: 'AI Models',         icon: Cpu              },
-    { to: '/datasets',  label: 'Datasets',          icon: Database         },
-  ]},
-  { section: 'Improve', items: [
-    { to: '/training',  label: 'Training',          icon: Dumbbell         },
-    { to: '/analytics', label: 'Analytics',         icon: BarChart3        },
+  { section: 'Data & AI', items: [
+    { to: '/datasets',    label: 'Datasets',           icon: Database        },
+    { to: '/training',    label: 'Training',           icon: Dumbbell        },
+    { to: '/models',      label: 'AI Models',          icon: Cpu             },
   ]},
   { section: 'System', items: [
-    { to: '/admin',     label: 'Administration',    icon: Shield           },
-    { to: '/settings',  label: 'Settings',          icon: Settings         },
+    { to: '/analytics',   label: 'Analytics',          icon: BarChart3       },
+    { to: '/admin',       label: 'Administration',     icon: Shield          },
+    { to: '/settings',    label: 'Settings',           icon: Settings        },
   ]},
 ]
 
@@ -36,7 +34,6 @@ const link = ({ isActive }: { isActive: boolean }) =>
 export default function Sidebar() {
   return (
     <aside className="flex w-56 shrink-0 flex-col bg-slate-900 text-slate-300 border-r border-slate-800">
-      {/* Logo */}
       <div className="px-4 py-4 border-b border-slate-800">
         <div className="flex items-center gap-2">
           <div className="h-7 w-7 rounded bg-blue-600 flex items-center justify-center">
@@ -44,12 +41,11 @@ export default function Sidebar() {
           </div>
           <div>
             <div className="text-sm font-semibold text-white leading-none">CLOCKIT</div>
-            <div className="text-xs text-slate-500 mt-0.5">Prototype</div>
+            <div className="text-xs text-slate-500 mt-0.5">Scanner Platform</div>
           </div>
         </div>
       </div>
 
-      {/* Nav sections */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4" aria-label="Main navigation">
         {NAV.map(({ section, items }) => (
           <div key={section}>
@@ -68,9 +64,8 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer */}
       <div className="px-4 py-3 border-t border-slate-800 text-xs text-slate-500">
-        CLOCKIT / PROMETHEUS-X · v0.1-prototype
+        CLOCKIT / PROMETHEUS-X · v1.1
       </div>
     </aside>
   )

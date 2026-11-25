@@ -1,11 +1,11 @@
 // Spec-correct type contracts for CLOCKIT frontend.
-// Status vocabulary: Completed / Failed / Needs review / Running / Queued / Draft / Configured / Ready / Disabled / Approved / Rejected / Archived
-// Severity vocabulary: Informational / Minor / Major / Critical  (NOT low/medium/high)
 
 export type SpecStatus =
   | 'Completed'
   | 'Failed'
   | 'Needs review'
+  | 'Needs dataset'
+  | 'Training'
   | 'Running'
   | 'Queued'
   | 'Draft'
@@ -16,18 +16,17 @@ export type SpecStatus =
   | 'Rejected'
   | 'Archived'
   | 'Unavailable'
+  | 'Validated'
+  | 'Validation failed'
+  | 'Uploaded'
 
 export type SpecSeverity = 'Critical' | 'Major' | 'Minor' | 'Informational'
-
-// Legacy compat (used in older components, migrate gradually)
-export type Status = 'pass' | 'fail' | 'review' | SpecStatus
-export type Severity = 'low' | 'medium' | 'high' | 'none' | SpecSeverity
 
 export interface Box { x: number; y: number; w: number; h: number }
 
 export interface Defect {
   type: string
-  severity: string   // SpecSeverity
+  severity: string
   confidence: number
   anomalyScore: number
   box: Box
@@ -52,9 +51,9 @@ export interface InspectionListItem {
   product: string
   station: string
   pipeline: string
-  status: string        // SpecStatus
+  status: string
   quality_score: number
-  severity: string      // SpecSeverity
+  severity: string
   defect_count: number
   requires_review: boolean
 }
@@ -84,8 +83,114 @@ export interface InspectionRunResult {
   overall_decision: string
   severity: string
   defects: Defect[]
-  score: number         // alias for quality_score
+  model_used?: string
+  heatmap_url?: string | null
+  score: number
   isMock: boolean
+}
+
+export interface CorrectionRecord {
+  id: number
+  inspection_id: string
+  feedback_category: string
+  original_decision?: string
+  corrected_decision: string
+  note: string
+  saved_image_path?: string
+  review_status: string
+  created_at: string
+}
+
+export interface ModelOutputSpec {
+  key: string
+  label: string
+  description: string
+}
+
+export interface ModelCapability {
+  model_key: string
+  display_name: string
+  model_family: string
+  task: string
+  integration_state: 'available_integrated' | 'downloaded_not_integrated' | 'planned_unavailable'
+  training_paradigm: string
+  requires_dataset: boolean
+  dataset_requirements: string
+  supported_training_strategies: string[]
+  supported_outputs: ModelOutputSpec[]
+  limitations: string
+  pretrained_path?: string | null
+  pretrained_present: boolean
+  trained_checkpoint_path?: string | null
+  ready_for_inference: boolean
+}
+
+export interface AnalysisModule {
+  id: number
+  scanner_unit_id: number
+  name: string
+  description?: string | null
+  purpose?: string | null
+  model_key: string
+  model_display_name: string
+  dataset_id?: number | null
+  dataset_name?: string | null
+  dataset_validation_status?: string | null
+  selected_outputs: string[]
+  config?: Record<string, unknown> | null
+  state: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ScannerUnit {
+  id: number
+  name: string
+  description?: string | null
+  industry: string
+  product_name?: string | null
+  status: string
+  module_count: number
+  modules: AnalysisModule[]
+  created_at: string
+  updated_at: string
+}
+
+export interface DatasetRecord {
+  id: number
+  name: string
+  category: string
+  industry: string
+  source_filename: string
+  file_count: number
+  valid_image_count: number
+  invalid_file_count: number
+  duplicate_count: number
+  validation_status: string
+  validation_details?: { errors?: string[] } | null
+  sha256_hash?: string | null
+  created_at: string
+}
+
+export interface TrainingJob {
+  id: number
+  scanner_unit_id?: number | null
+  module_id?: number | null
+  dataset_id?: number | null
+  model_key: string
+  strategy: string
+  status: string
+  progress_pct: number
+  current_step: string
+  logs: string[]
+  max_epochs: number
+  limit_train_batches: number
+  metrics?: Record<string, unknown> | null
+  checkpoint_path?: string | null
+  error_message?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+  created_at: string
 }
 
 export interface ModelInfo {
@@ -93,7 +198,7 @@ export interface ModelInfo {
   name: string
   task: string
   version: string
-  state: string         // SpecStatus
+  state: string
   enabled: boolean
   model_family: string
   weights_path: string
@@ -108,7 +213,7 @@ export interface Pipeline {
   description?: string
   manufacturer: string
   is_active: boolean
-  state: string         // SpecStatus
+  state: string
   stages: PipelineStage[]
   thresholds?: Record<string, number>
   created_at: string
@@ -149,24 +254,4 @@ export interface SeverityCount {
 export interface StatusCount {
   status: string
   count: number
-}
-
-// Legacy compat — kept for components not yet migrated
-export interface Inspection extends InspectionListItem {
-  score: number
-  defects: number
-}
-export interface InspectionResult {
-  inspectionId?: string
-  score: number
-  status: string
-  defects: Defect[]
-  isMock?: boolean
-}
-export interface InspectionRequest {
-  industry: string
-  product: string
-  pipelineId: string
-  threshold: number
-  fileName: string
 }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,10 +13,12 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
-from backend.app.core.config import get_settings
+from backend.app.core.config import BASE_DIR, get_settings
 from backend.app.database.connection import get_db
+from backend.app.database.models.scanner import CorrectionRecord, ScannerUnit
 from backend.app.models.efficientad_adapter import EfficientAdAdapter
 from backend.app.database.repositories.inspection_repository import (
     AnomalyResultRepository,
@@ -124,6 +128,8 @@ class InspectionRunOut(BaseModel):
     overall_decision: str
     severity: str
     defects: list[DefectOut]
+    model_used: str = "OpenCV Heuristic"
+    heatmap_url: Optional[str] = None
     # Legacy compat
     score: int
     isMock: bool = False
@@ -132,6 +138,19 @@ class InspectionRunOut(BaseModel):
 class ReviewIn(BaseModel):
     decision: str    # Approved / Rejected
     note: str
+    feedback_category: str = "Correct detection"
+
+
+class CorrectionOut(BaseModel):
+    id: int
+    inspection_id: str
+    feedback_category: str
+    original_decision: Optional[str]
+    corrected_decision: str
+    note: str
+    saved_image_path: Optional[str]
+    review_status: str
+    created_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +385,28 @@ def review_queue(
     return items[:limit]
 
 
+@router.get("/corrections", response_model=list[CorrectionOut])
+def list_corrections(limit: int = 100, db: Session = Depends(get_db)) -> list[CorrectionOut]:
+    """List human feedback / false-positive correction records."""
+    rows = db.scalars(
+        select(CorrectionRecord).order_by(CorrectionRecord.created_at.desc()).limit(limit)
+    ).all()
+    return [
+        CorrectionOut(
+            id=r.id,
+            inspection_id=f"INS-{r.inspection_id}",
+            feedback_category=r.feedback_category,
+            original_decision=r.original_decision,
+            corrected_decision=r.corrected_decision,
+            note=r.note,
+            saved_image_path=r.saved_image_path,
+            review_status=r.review_status,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]
+
+
 @router.get("/{inspection_id}", response_model=InspectionDetailOut)
 def get_inspection(inspection_id: str, db: Session = Depends(get_db)) -> InspectionDetailOut:
     """Get full inspection detail including anomaly results and evidence."""
@@ -381,12 +422,13 @@ async def run_inspection(
     industry: str = Form("Automotive"),
     product: str = Form("Brake disc"),
     pipelineId: str = Form("p1"),
+    scannerUnitId: Optional[int] = Form(None),
     threshold: float = Form(0.5),
     fileName: str = Form("upload.png"),
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ) -> InspectionRunOut:
-    """Save uploaded image, run prototype OpenCV heuristic, persist result to SQLite."""
+    """Save uploaded image, run configured Scanner Unit / AI model, and persist result."""
     settings = get_settings()
     upload_dir = settings.storage_root / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -396,14 +438,36 @@ async def run_inspection(
     stored_path = upload_dir / stored_name
 
     heatmap_path: Optional[str] = None
+    heatmap_url: Optional[str] = None
     processing_time_ms: Optional[float] = None
     confidence_score: float = 0.89
-    used_model_name: Optional[str] = None
+    used_model_name: str = "OpenCV Heuristic"
+
+    # Determine model preference from Scanner Unit if provided
+    preferred_model_key: Optional[str] = None
+    if scannerUnitId is not None:
+        unit = db.scalar(
+            select(ScannerUnit)
+            .options(selectinload(ScannerUnit.modules))
+            .where(ScannerUnit.id == scannerUnitId)
+        )
+        if unit is None:
+            raise HTTPException(status_code=404, detail="Scanner Unit not found")
+        industry = unit.industry or industry
+        product = unit.product_name or product
+        pipelineId = unit.name
+        ready_mods = [m for m in unit.modules if m.state == "Ready"]
+        if ready_mods:
+            preferred_model_key = ready_mods[0].model_key
 
     if file is not None:
         raw_bytes = await file.read()
         stored_path.write_bytes(raw_bytes)
-        if EfficientAdAdapter.is_available():
+        use_efficientad = (
+            preferred_model_key == "efficientad_small"
+            or (preferred_model_key is None and EfficientAdAdapter.is_available())
+        )
+        if use_efficientad and EfficientAdAdapter.is_available():
             pred = EfficientAdAdapter.predict_bytes(raw_bytes, threshold=threshold)
             anomaly_score = pred["anomaly_score"]
             confidence_score = pred["confidence_score"]
@@ -411,6 +475,8 @@ async def run_inspection(
             heatmap_path = pred["heatmap_path"]
             processing_time_ms = pred["processing_time_ms"]
             used_model_name = pred["model_name"]
+            if heatmap_path:
+                heatmap_url = f"/results/{Path(heatmap_path).name}"
         else:
             anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
     else:
@@ -470,6 +536,24 @@ async def run_inspection(
     )
     db.commit()
 
+    # Save standardized JSON inspection report to outputs/reports/
+    reports_dir = BASE_DIR / "outputs" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report_payload = {
+        "inspection_id": f"INS-{insp.id}",
+        "scanner_unit_id": scannerUnitId,
+        "industry": industry,
+        "product": product,
+        "model_used": used_model_name,
+        "overall_decision": decision,
+        "quality_score": int(round(quality_score * 100)),
+        "anomaly_score": anomaly_score,
+        "severity": top_severity,
+        "defects": [d.model_dump() for d in defects],
+        "timestamp": insp.inspected_at.isoformat(),
+    }
+    (reports_dir / f"INS-{insp.id}.json").write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+
     status_label = _decision_to_status(decision)
     return InspectionRunOut(
         inspectionId=f"INS-{insp.id}",
@@ -478,6 +562,8 @@ async def run_inspection(
         overall_decision=decision,
         severity=top_severity,
         defects=defects,
+        model_used=used_model_name,
+        heatmap_url=heatmap_url,
         score=int(round(quality_score * 100)),
         isMock=False,
     )
@@ -489,7 +575,7 @@ def review_inspection(
     body: ReviewIn,
     db: Session = Depends(get_db),
 ) -> dict:
-    """Submit a human review decision (Approved / Rejected) with a mandatory note."""
+    """Submit a human review decision (Approved / Rejected) and store correction feedback."""
     if body.decision not in ("Approved", "Rejected"):
         raise HTTPException(status_code=422, detail="decision must be 'Approved' or 'Rejected'")
     if not body.note.strip():
@@ -501,18 +587,40 @@ def review_inspection(
     if insp is None:
         raise HTTPException(status_code=404, detail="Inspection not found")
 
+    original_decision = insp.overall_decision
     new_decision = "PASS" if body.decision == "Approved" else "FAIL"
     insp.overall_decision = new_decision
     insp.status = "reviewed"
 
     for sev in insp.severity_scores:
         sev.requires_human_review = False
-        sev.rule_notes = f"[{body.decision}] {body.note}"
+        sev.rule_notes = f"[{body.decision} · {body.feedback_category}] {body.note}"
 
+    saved_fp_path: Optional[str] = None
+    if body.feedback_category == "False positive" and Path(insp.image_file_path).is_file():
+        fp_dir = BASE_DIR / "data" / "false_positives"
+        fp_dir.mkdir(parents=True, exist_ok=True)
+        src_p = Path(insp.image_file_path)
+        dst_p = fp_dir / f"INS-{insp.id}_{src_p.name}"
+        shutil.copy2(src_p, dst_p)
+        saved_fp_path = str(dst_p.relative_to(BASE_DIR))
+
+    corr = CorrectionRecord(
+        inspection_id=insp.id,
+        feedback_category=body.feedback_category,
+        original_decision=original_decision,
+        corrected_decision=new_decision,
+        note=body.note.strip(),
+        saved_image_path=saved_fp_path,
+        review_status="Reviewed",
+    )
+    db.add(corr)
     db.commit()
     return {
         "status": body.decision,
         "inspectionId": inspection_id,
+        "feedback_category": body.feedback_category,
+        "saved_false_positive_path": saved_fp_path,
         "note": body.note,
     }
 

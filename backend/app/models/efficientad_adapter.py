@@ -48,12 +48,14 @@ class EfficientAdAdapter:
             import torch
             from anomalib.models.image.efficient_ad.lightning_model import EfficientAd
 
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             aux_dir = settings.storage_root / "temporary" / "aux_imagenette"
-            kwargs: dict[str, Any] = {"map_location": torch.device("cpu")}
+            kwargs: dict[str, Any] = {"map_location": device}
             if aux_dir.is_dir():
                 kwargs["imagenet_dir"] = str(aux_dir)
 
             model = EfficientAd.load_from_checkpoint(str(path), **kwargs)
+            model.to(device)
             model.eval()
             cls._model = model
             cls._loaded_ckpt = path
@@ -83,6 +85,8 @@ class EfficientAdAdapter:
         tensor = torch.from_numpy(resized).permute(2, 0, 1).float().unsqueeze(0) / 255.0
 
         model = cls._get_model(ckpt_path)
+        device = next(model.parameters()).device
+        tensor = tensor.to(device)
         with torch.no_grad():
             if getattr(model, "pre_processor", None) is not None and callable(model.pre_processor):
                 tensor_in = model.pre_processor(tensor)

@@ -8,7 +8,7 @@ from typing import Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.app.core.config import get_settings
+from backend.app.core.config import BASE_DIR, get_settings
 from backend.app.database.base import Base
 
 settings = get_settings()
@@ -40,16 +40,19 @@ SessionLocal = sessionmaker(
 
 
 def ensure_runtime_dirs() -> None:
-    """Ensure local data, artifacts, and storage directories exist."""
+    """Ensure active local data, artifacts, storage, and outputs directories exist."""
     dirs = [
         settings.data_root / sub
-        for sub in ("raw", "processed", "train", "validation", "test")
+        for sub in ("datasets", "training", "false_positives", "raw")
     ] + [
         settings.artifact_root / sub
-        for sub in ("pretrained", "trained", "checkpoints", "feature_banks", "calibration", "evaluations")
+        for sub in ("pretrained", "trained", "checkpoints")
     ] + [
         settings.storage_root / sub
-        for sub in ("uploads", "inspection_results", "reports", "temporary")
+        for sub in ("uploads", "inspection_results", "temporary")
+    ] + [
+        BASE_DIR / "outputs" / sub
+        for sub in ("reports", "visualizations")
     ]
     for directory in dirs:
         directory.mkdir(parents=True, exist_ok=True)

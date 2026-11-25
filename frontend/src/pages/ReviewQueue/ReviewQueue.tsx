@@ -1,6 +1,6 @@
 /**
- * Review Queue — dedicated page for inspections requiring human review.
- * Ordered by severity then age. No filter hacks.
+ * Review Queue — dedicated page for inspections requiring human review,
+ * plus operator correction & false-positive feedback log.
  */
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -8,17 +8,20 @@ import { RefreshCw, AlertTriangle } from 'lucide-react'
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
-import { getReviewQueue } from '../../services/inspectionService'
-import type { InspectionListItem } from '../../types'
+import { getReviewQueue, listCorrections } from '../../services/inspectionService'
+import type { CorrectionRecord, InspectionListItem } from '../../types'
 
 export default function ReviewQueue() {
   const [rows, setRows] = useState<InspectionListItem[]>()
+  const [corrections, setCorrections] = useState<CorrectionRecord[]>([])
   const [err, setErr] = useState(false)
 
   const load = () => {
     setErr(false)
     setRows(undefined)
-    getReviewQueue(100).then(setRows).catch(() => setErr(true))
+    Promise.all([getReviewQueue(100), listCorrections(50)])
+      .then(([r, c]) => { setRows(r); setCorrections(c) })
+      .catch(() => setErr(true))
   }
 
   useEffect(load, [])
@@ -27,7 +30,7 @@ export default function ReviewQueue() {
   if (err) return <ErrorState message="Failed to load review queue" onRetry={load} />
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3 page-header">
         <div>
           <h1>Review Queue</h1>
@@ -40,7 +43,7 @@ export default function ReviewQueue() {
         <div className="card">
           <EmptyState
             title="Queue is empty"
-            body="No inspections currently require human review. Great work!"
+            body="No inspections currently require human review."
             action={<Link to="/history" className="text-sm text-blue-600">View inspection history →</Link>}
           />
         </div>
@@ -85,11 +88,45 @@ export default function ReviewQueue() {
         </section>
       )}
 
+      {/* Operator Corrections & False Positives Log */}
+      <section className="card">
+        <div className="px-4 py-3 border-b border-slate-200">
+          <h2 className="font-medium text-sm">Correction & False-Positive Records ({corrections.length})</h2>
+        </div>
+        {corrections.length === 0 ? (
+          <EmptyState title="No corrections recorded yet" body="Human review feedback and false positives will appear here." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Inspection</th><th>Category</th><th>Decision</th><th>Note</th><th>Saved Sample</th><th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {corrections.map(c => (
+                  <tr key={c.id}>
+                    <td className="font-mono text-xs">
+                      <Link to={`/inspections/${c.inspection_id}`} className="text-blue-600 hover:underline">{c.inspection_id}</Link>
+                    </td>
+                    <td><StatusBadge value={c.feedback_category === 'False positive' ? 'Needs review' : 'Completed'} /> <span className="ml-1 text-xs">{c.feedback_category}</span></td>
+                    <td className="text-xs font-medium">{c.corrected_decision}</td>
+                    <td className="text-xs text-slate-600 max-w-xs truncate">{c.note}</td>
+                    <td className="text-xs font-mono text-slate-400">{c.saved_image_path ?? '—'}</td>
+                    <td className="text-xs text-slate-400">{new Date(c.created_at).toLocaleDateString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       <div className="card px-4 py-3 bg-amber-50 border-amber-200">
         <div className="flex items-start gap-2">
           <AlertTriangle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
           <p className="text-xs text-amber-800">
-            Review decisions are recorded with a mandatory note. All reviewed inspections are audited in the database.
+            False-positive images are saved to <code>data/false_positives/</code> and require review before being incorporated into future training iterations.
           </p>
         </div>
       </div>

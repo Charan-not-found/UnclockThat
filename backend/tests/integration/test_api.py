@@ -28,11 +28,14 @@ def test_fastapi_app_routes_registered():
     paths = set(app.openapi()["paths"].keys())
     expected = [
         "/api/v1/health",
+        "/api/v1/scanner-units",
+        "/api/v1/model-catalogue",
+        "/api/v1/datasets",
+        "/api/v1/training-jobs",
         "/api/v1/inspections",
+        "/api/v1/inspections/corrections",
         "/api/v1/models",
-        "/api/v1/pipelines",
         "/api/v1/analytics/summary",
-        "/api/v1/analytics/trend",
         "/api/v1/admin/seed",
     ]
     for path in expected:
@@ -184,3 +187,116 @@ def test_models_list_read_only():
     after = len(list(ModelConfigRepository(db).list_all(limit=1000)))
     db.close()
     assert after == before, "GET /models must not create records (spec violation fixed)"
+
+
+def test_scanner_unit_and_module_crud():
+    """Verify Scanner Unit + Analysis Module creation, capability validation, and cleanup."""
+    from backend.app.api.v1.scanner_units import (
+        ModuleIn,
+        ScannerUnitIn,
+        add_module,
+        create_scanner_unit,
+        delete_scanner_unit,
+        list_model_catalogue,
+    )
+    catalogue = list_model_catalogue()
+    assert any(c["model_key"] == "efficientad_small" for c in catalogue)
+
+    db = SessionLocal()
+    try:
+        unit = create_scanner_unit(
+            ScannerUnitIn(name="Test Casting Scanner", industry="Automotive", product_name="Brake disc"),
+            db=db,
+        )
+        assert unit.id is not None
+        assert unit.status == "Draft"
+
+        mod = add_module(
+            unit.id,
+            ModuleIn(
+                name="Surface Anomaly",
+                model_key="opencv_heuristic",
+                selected_outputs=["anomaly_score", "bounding_boxes"],
+            ),
+            db=db,
+        )
+        assert mod.state == "Ready"
+
+        res = delete_scanner_unit(unit.id, db=db)
+        assert res["status"] == "deleted"
+    finally:
+        db.close()
+
+
+def test_training_rejects_missing_or_empty_dataset():
+    """Verify training fails with a clear 'Training issue' when dataset is missing or empty."""
+    from fastapi import HTTPException
+    from backend.app.api.v1.training import TrainingJobIn, start_training_job
+    db = SessionLocal()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            start_training_job(TrainingJobIn(model_key="efficientad_small", dataset_id=None), db=db)
+        assert exc.value.status_code == 422
+        assert "Training issue" in exc.value.detail
+    finally:
+        db.close()
+
+
+def test_zip_validator_and_480p_resizing(tmp_path):
+    """Verify strict flat-image ZIP validation and 640x480 (480p) standardization."""
+    import zipfile
+    import cv2
+    import numpy as np
+    from fastapi import HTTPException
+    from backend.app.api.v1.datasets import _validate_and_extract_zip
+
+    # 1. Empty ZIP -> rejected
+    empty_zip = tmp_path / "empty.zip"
+    with zipfile.ZipFile(empty_zip, "w"):
+        pass
+    out_dir = tmp_path / "out_empty"
+    out_dir.mkdir()
+    with pytest.raises(HTTPException) as exc:
+        _validate_and_extract_zip(empty_zip, out_dir)
+    assert exc.value.status_code == 422
+    assert "empty" in exc.value.detail.lower()
+
+    # 2. Subfolder in ZIP -> rejected
+    sub_zip = tmp_path / "sub.zip"
+    img = np.zeros((100, 120, 3), dtype=np.uint8)
+    _, png_bytes = cv2.imencode(".png", img)
+    with zipfile.ZipFile(sub_zip, "w") as zf:
+        zf.writestr("nested/1.png", png_bytes.tobytes())
+    out_sub = tmp_path / "out_sub"
+    out_sub.mkdir()
+    with pytest.raises(HTTPException) as exc:
+        _validate_and_extract_zip(sub_zip, out_sub)
+    assert exc.value.status_code == 422
+    assert "subfolder" in exc.value.detail.lower()
+
+    # 3. Non-image file in ZIP -> rejected
+    txt_zip = tmp_path / "txt.zip"
+    with zipfile.ZipFile(txt_zip, "w") as zf:
+        zf.writestr("1.png", png_bytes.tobytes())
+        zf.writestr("notes.txt", b"not an image")
+    out_txt = tmp_path / "out_txt"
+    out_txt.mkdir()
+    with pytest.raises(HTTPException) as exc:
+        _validate_and_extract_zip(txt_zip, out_txt)
+    assert exc.value.status_code == 422
+    assert "non-image" in exc.value.detail.lower()
+
+    # 4. Valid flat image-only ZIP -> accepted & standardized to 640x480 (480p)
+    good_zip = tmp_path / "good.zip"
+    with zipfile.ZipFile(good_zip, "w") as zf:
+        zf.writestr("1.png", png_bytes.tobytes())
+        zf.writestr("2.png", png_bytes.tobytes())
+    out_good = tmp_path / "out_good"
+    out_good.mkdir()
+    res = _validate_and_extract_zip(good_zip, out_good)
+    assert res["valid_image_count"] == 2
+    assert res["duplicate_count"] == 1
+    assert res["resolution"] == "640x480 (480p)"
+    saved = cv2.imread(str(out_good / "1.jpg"))
+    assert saved is not None
+    assert saved.shape[:2] == (480, 640)

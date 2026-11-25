@@ -26,27 +26,25 @@ dist/
 
 # Local datasets
 data/raw/*
-data/processed/*
-data/train/*
-data/validation/*
-data/test/*
+data/datasets/*
+data/training/*
+data/false_positives/*
 !data/**/.gitkeep
 
 # Generated artifacts
 artifacts/pretrained/*
 artifacts/trained/*
 artifacts/checkpoints/*
-artifacts/feature_banks/*
-artifacts/calibration/*
-artifacts/evaluations/*
 !artifacts/**/.gitkeep
 
 # User files and runtime output
 storage/uploads/*
 storage/inspection_results/*
-storage/reports/*
 storage/temporary/*
 !storage/**/.gitkeep
+outputs/reports/*
+outputs/visualizations/*
+!outputs/**/.gitkeep
 *.log
 logs/
 

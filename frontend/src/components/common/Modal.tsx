@@ -21,17 +21,17 @@ const Modal: FC<Props> = ({
 }) => {
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal aria-labelledby="modal-title">
-      <div className="w-full max-w-md rounded-lg bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <h2 id="modal-title" className="font-semibold text-slate-900">{title}</h2>
-          <button onClick={onCancel} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Close">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal aria-labelledby="modal-title">
+      <div className="w-full max-w-md rounded-lg shadow-xl popup-surface">
+        <div className="flex items-center justify-between border-b px-5 py-4" style={{ borderColor: 'var(--color-border)' }}>
+          <h2 id="modal-title" className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>{title}</h2>
+          <button onClick={onCancel} className="rounded p-1 hover:opacity-80" style={{ color: 'var(--color-text-secondary)' }} aria-label="Close">
             <X size={18} />
           </button>
         </div>
-        <div className="px-5 py-4 text-sm text-slate-700">{children}</div>
+        <div className="px-5 py-4 text-sm" style={{ color: 'var(--color-text-primary)' }}>{children}</div>
         {onConfirm && (
-          <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-3">
+          <div className="flex justify-end gap-2 border-t px-5 py-3 popup-subtle rounded-b-lg" style={{ borderColor: 'var(--color-border)' }}>
             <Button variant="secondary" size="sm" onClick={onCancel}>{cancelLabel}</Button>
             <Button variant={dangerous ? 'danger' : 'primary'} size="sm" onClick={onConfirm} disabled={confirmDisabled} loading={confirmLoading}>
               {confirmLabel}

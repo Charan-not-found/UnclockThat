@@ -127,7 +127,8 @@ def main() -> None:
         limit_train_batches=args.limit_train_batches,
         limit_val_batches=args.limit_val_batches,
         limit_test_batches=args.limit_test_batches,
-        accelerator="cpu",
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=1,
         logger=False,
         enable_progress_bar=True,
     )

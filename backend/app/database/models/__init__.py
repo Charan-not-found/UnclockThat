@@ -4,6 +4,13 @@ from backend.app.database.models.inspection import AnomalyResult, InspectionReco
 from backend.app.database.models.manufacturer import ManufacturerProfile, User
 from backend.app.database.models.model_config import ModelConfig
 from backend.app.database.models.pipeline import PipelineConfig
+from backend.app.database.models.scanner import (
+    AnalysisModule,
+    CorrectionRecord,
+    DatasetRecord,
+    ScannerUnit,
+    TrainingRun,
+)
 
 __all__ = [
     "ManufacturerProfile",
@@ -13,4 +20,9 @@ __all__ = [
     "InspectionRecord",
     "AnomalyResult",
     "SeverityScore",
+    "ScannerUnit",
+    "AnalysisModule",
+    "DatasetRecord",
+    "TrainingRun",
+    "CorrectionRecord",
 ]

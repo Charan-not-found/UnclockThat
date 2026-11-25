@@ -1,30 +1,34 @@
 /**
- * New Inspection page — real file upload → real API → persist result.
- * No mock data. Progress bar only shown while request is in-flight.
+ * Test Sample page (replaces New Inspection) — test an uploaded sample image
+ * against a configured Scanner Unit or active trained model.
+ * No inbuilt industry or product presets.
  */
-import { useState, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState, useRef } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Upload, Play, CheckCircle2, AlertCircle } from 'lucide-react'
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
 import Modal from '../../components/common/Modal'
 import { ErrorState } from '../../components/common/LoadingState'
 import { runInspection, reviewInspection } from '../../services/inspectionService'
-import type { InspectionRunResult } from '../../types'
+import { listScannerUnits } from '../../services/scannerUnitService'
+import type { InspectionRunResult, ScannerUnit } from '../../types'
 
-const FIELD = 'mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none'
+const FIELD = 'mt-1 w-full px-3 py-2 text-sm input-field focus:border-blue-500 focus:outline-none'
 
-const INDUSTRIES: Record<string, string[]> = {
-  Automotive:    ['Brake disc', 'Gear housing', 'Engine casing', 'Wheel hub'],
-  Electronics:   ['PCB', 'Connector', 'Display panel', 'IC package'],
-  Textile:       ['Woven fabric', 'Composite mesh'],
-  Aerospace:     ['Turbine blade', 'Structural panel'],
-  Manufacturing: ['Generic part'],
-}
+const FEEDBACK_CATEGORIES = [
+  'Correct detection',
+  'False positive',
+  'False negative',
+  'Incorrect localization',
+  'Incorrect class',
+  'Uncertain',
+]
 
 export default function Inspection() {
-  const [industry, setIndustry] = useState('Automotive')
-  const [product, setProduct] = useState(INDUSTRIES.Automotive[0])
+  const [searchParams] = useSearchParams()
+  const [scanners, setScanners] = useState<ScannerUnit[]>([])
+  const [scannerId, setScannerId] = useState<string>(searchParams.get('scannerId') ?? '')
   const [threshold, setThreshold] = useState(0.5)
   const [file, setFile] = useState<File>()
   const [previewUrl, setPreviewUrl] = useState<string>()
@@ -33,10 +37,15 @@ export default function Inspection() {
   const [err, setErr] = useState<string>()
   const [reviewOpen, setReviewOpen] = useState(false)
   const [reviewDecision, setReviewDecision] = useState<'Approved' | 'Rejected'>('Approved')
+  const [feedbackCat, setFeedbackCat] = useState('Correct detection')
   const [reviewNote, setReviewNote] = useState('')
   const [reviewing, setReviewing] = useState(false)
   const [reviewed, setReviewed] = useState(false)
   const urlRef = useRef<string>()
+
+  useEffect(() => {
+    listScannerUnits().then(setScanners).catch(() => {})
+  }, [])
 
   const pickFile = (f?: File) => {
     if (!f) return
@@ -56,13 +65,21 @@ export default function Inspection() {
     setErr(undefined)
     setResult(undefined)
     try {
+      const selectedUnit = scanners.find(u => String(u.id) === scannerId)
       const res = await runInspection(
-        { industry, product, pipelineId: 'default', threshold, fileName: file.name },
+        {
+          industry: selectedUnit?.industry || 'General',
+          product: selectedUnit?.product_name || file.name,
+          pipelineId: selectedUnit?.name || 'default',
+          scannerUnitId: scannerId ? Number(scannerId) : null,
+          threshold,
+          fileName: file.name,
+        },
         file,
       )
       setResult(res)
     } catch {
-      setErr('Inspection failed. Check that the backend is running and try again.')
+      setErr('Sample test failed. Check that the backend is running and try again.')
     } finally {
       setBusy(false)
     }
@@ -72,7 +89,7 @@ export default function Inspection() {
     if (!result?.inspectionId || !reviewNote.trim()) return
     setReviewing(true)
     try {
-      await reviewInspection(result.inspectionId, reviewDecision, reviewNote)
+      await reviewInspection(result.inspectionId, reviewDecision, reviewNote, feedbackCat)
       setReviewed(true)
       setReviewOpen(false)
     } catch {
@@ -82,43 +99,44 @@ export default function Inspection() {
     }
   }
 
+  const apiRoot = ((import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8000/api/v1').replace('/api/v1', '')
+  const heatmapSrc = result?.heatmap_url ? `${apiRoot}${result.heatmap_url}` : undefined
+
   return (
     <div className="space-y-5">
       <div className="page-header">
-        <h1>New Inspection</h1>
-        <p>Upload an image and run the prototype inspection pipeline.</p>
+        <h1>Test Sample</h1>
+        <p>Upload a sample image and test it against a Scanner Unit or the active trained model.</p>
       </div>
 
-      {/* Inference engine info */}
-      <div className="card px-4 py-3 bg-blue-50 border-blue-200">
+      <div className="card px-4 py-3 bg-blue-500/10 border-blue-500/30">
         <div className="flex items-start gap-2">
-          <AlertCircle size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
-          <p className="text-xs text-blue-800">
-            <strong>Inference engine:</strong> Uses the trained <em>EfficientAD-Small</em> model when its checkpoint is
-            available, or falls back to the OpenCV heuristic otherwise.
+          <AlertCircle size={16} className="text-blue-500 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-blue-400">
+            <strong>Inference engine:</strong> Uses the selected Scanner Unit&apos;s module (or trained <em>EfficientAD-Small</em> when available), falling back to OpenCV contrast heuristic if no trained checkpoint exists.
           </p>
         </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[300px_1fr]">
-        {/* Config panel */}
         <section className="card p-4 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700">Industry
-              <select className={FIELD} value={industry} onChange={e => { setIndustry(e.target.value); setProduct(INDUSTRIES[e.target.value][0]) }}>
-                {Object.keys(INDUSTRIES).map(i => <option key={i}>{i}</option>)}
+            <label className="block text-sm font-medium">Scanner Unit
+              <select className={FIELD} value={scannerId} onChange={e => setScannerId(e.target.value)}>
+                <option value="">Default active model</option>
+                {scanners.map(s => (
+                  <option key={s.id} value={s.id}>{s.name} ({s.status})</option>
+                ))}
               </select>
             </label>
+            {scanners.length === 0 && (
+              <p className="text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>
+                No Scanner Units created yet. <Link to="/scanners" className="text-blue-500 hover:underline">Create one →</Link>
+              </p>
+            )}
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700">Product
-              <select className={FIELD} value={product} onChange={e => setProduct(e.target.value)}>
-                {INDUSTRIES[industry].map(p => <option key={p}>{p}</option>)}
-              </select>
-            </label>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium">
               Anomaly threshold: <span className="font-mono">{threshold.toFixed(2)}</span>
               <input
                 type="range" min={0} max={1} step={0.05} value={threshold}
@@ -126,30 +144,30 @@ export default function Inspection() {
                 className="mt-1 w-full accent-blue-600"
               />
             </label>
-            <p className="text-xs text-slate-400 mt-0.5">Higher = less sensitive to anomalies</p>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>Higher = less sensitive to anomalies</p>
           </div>
 
-          {/* File upload */}
-          <label className="flex cursor-pointer flex-col items-center rounded-md border-2 border-dashed border-slate-300 p-5 text-sm text-slate-500 hover:border-blue-400 hover:bg-blue-50 transition-colors">
-            <Upload size={22} className="text-slate-400" />
-            <span className="mt-1 font-medium text-slate-600">{file ? file.name : 'Choose an image'}</span>
-            <span className="text-xs">{file ? `${(file.size / 1024).toFixed(0)} KB` : 'JPG, PNG up to 50 MB'}</span>
+          <label className="flex cursor-pointer flex-col items-center rounded-md border-2 border-dashed p-5 text-sm input-field hover:border-blue-400 transition-colors">
+            <Upload size={22} />
+            <span className="mt-1 font-medium">{file ? file.name : 'Choose a sample image'}</span>
+            <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+              {file ? `${(file.size / 1024).toFixed(0)} KB` : 'JPG, PNG up to 50 MB'}
+            </span>
             <input type="file" accept="image/*" className="sr-only" onChange={e => pickFile(e.target.files?.[0])} />
           </label>
 
           <Button className="w-full justify-center" disabled={!file || busy} loading={busy} onClick={run}>
             <Play size={15} />
-            {busy ? 'Analysing…' : 'Run inspection'}
+            {busy ? 'Testing…' : 'Run test sample'}
           </Button>
         </section>
 
-        {/* Results panel */}
         <section className="card p-4">
           {!previewUrl && !result && (
-            <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+            <div className="flex flex-col items-center justify-center py-20" style={{ color: 'var(--color-text-secondary)' }}>
               <Upload size={32} className="mb-2" />
-              <p className="font-medium text-slate-600">No image selected</p>
-              <p className="text-sm">Upload an image and run an inspection to see results here.</p>
+              <p className="font-medium">No sample selected</p>
+              <p className="text-sm">Upload an image and run a test sample to see results here.</p>
             </div>
           )}
 
@@ -159,19 +177,14 @@ export default function Inspection() {
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-2">
                 <figure>
-                  <img src={previewUrl} alt="Original uploaded image" className="aspect-video w-full rounded-md bg-slate-100 object-contain" />
-                  <figcaption className="mt-1 text-xs text-slate-400">Original</figcaption>
+                  <img src={previewUrl} alt="Original sample image" className="aspect-video w-full rounded-md popup-subtle object-contain" />
+                  <figcaption className="mt-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>Original</figcaption>
                 </figure>
                 <figure>
-                  <div className="relative aspect-video overflow-hidden rounded-md bg-slate-100">
-                    <img src={previewUrl} alt="Inspection overlay view" className="h-full w-full object-contain" />
+                  <div className="relative aspect-video overflow-hidden rounded-md popup-subtle">
+                    <img src={heatmapSrc ?? previewUrl} alt="Sample overlay view" className="h-full w-full object-contain" />
                     {result?.defects.map((d, i) => (
                       <div key={i}>
-                        <div className="absolute rounded-full" style={{
-                          left: `${d.box.x - 4}%`, top: `${d.box.y - 4}%`,
-                          width: `${d.box.w + 8}%`, height: `${d.box.h + 8}%`,
-                          background: 'radial-gradient(circle,rgba(220,38,38,.4),transparent 70%)',
-                        }} />
                         <div className="absolute border-2 border-red-500" style={{
                           left: `${d.box.x}%`, top: `${d.box.y}%`,
                           width: `${d.box.w}%`, height: `${d.box.h}%`,
@@ -183,33 +196,36 @@ export default function Inspection() {
                       </div>
                     ))}
                     {busy && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-white/60">
-                        <div className="text-sm text-slate-600 animate-pulse">Analysing…</div>
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                        <div className="text-sm text-white animate-pulse">Testing sample…</div>
                       </div>
                     )}
                   </div>
-                  <figcaption className="mt-1 text-xs text-slate-400">
-                    {result ? 'Anomaly localisation overlay (OpenCV heuristic)' : 'Overlay will appear after inspection'}
+                  <figcaption className="mt-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                    {result ? `Overlay (${result.model_used ?? 'Inference'})` : 'Overlay will appear after test'}
                   </figcaption>
                 </figure>
               </div>
 
               {result && (
-                <div className="space-y-3 border-t border-slate-200 pt-3">
-                  {/* Decision header */}
+                <div className="space-y-3 border-t pt-3" style={{ borderColor: 'var(--color-border)' }}>
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="text-3xl font-semibold tabular-nums">{result.quality_score}</span>
-                    <span className="text-sm text-slate-400">quality score</span>
+                    <span className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>quality score</span>
                     <StatusBadge value={result.status} size="md" />
                     <StatusBadge value={result.severity} size="md" />
+                    {result.model_used && (
+                      <span className="text-xs px-2 py-0.5 rounded popup-subtle border" style={{ borderColor: 'var(--color-border)' }}>
+                        {result.model_used}
+                      </span>
+                    )}
                     {result.inspectionId && (
-                      <Link to={`/inspections/${result.inspectionId}`} className="ml-auto text-xs text-blue-600 hover:underline">
+                      <Link to={`/inspections/${result.inspectionId}`} className="ml-auto text-xs text-blue-500 hover:underline">
                         View full detail →
                       </Link>
                     )}
                   </div>
 
-                  {/* Defect table */}
                   {result.defects.length > 0 ? (
                     <table>
                       <thead><tr><th>Defect type</th><th>Severity</th><th>Confidence</th><th>Anomaly score</th></tr></thead>
@@ -225,17 +241,18 @@ export default function Inspection() {
                       </tbody>
                     </table>
                   ) : (
-                    <p className="text-sm text-slate-400">No significant anomalies detected above {threshold.toFixed(2)} threshold.</p>
+                    <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+                      No significant anomalies detected above {threshold.toFixed(2)} threshold.
+                    </p>
                   )}
 
-                  {/* Review section */}
                   {reviewed ? (
-                    <p className="flex items-center gap-2 text-sm text-green-700">
-                      <CheckCircle2 size={16} /> Result reviewed and recorded.
+                    <p className="flex items-center gap-2 text-sm text-green-500">
+                      <CheckCircle2 size={16} /> Review & correction feedback recorded.
                     </p>
                   ) : (
                     <Button variant="secondary" onClick={() => setReviewOpen(true)}>
-                      Submit human review
+                      Submit human review / feedback
                     </Button>
                   )}
                 </div>
@@ -245,10 +262,9 @@ export default function Inspection() {
         </section>
       </div>
 
-      {/* Review modal */}
       <Modal
         open={reviewOpen}
-        title="Human Review"
+        title="Human Review & Feedback"
         confirmLabel="Submit review"
         onCancel={() => setReviewOpen(false)}
         onConfirm={submitReview}
@@ -257,7 +273,7 @@ export default function Inspection() {
       >
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-slate-700">Decision</label>
+            <label className="block text-sm font-medium">Decision</label>
             <div className="mt-1 flex gap-3">
               {(['Approved', 'Rejected'] as const).map(d => (
                 <label key={d} className="flex items-center gap-2 cursor-pointer text-sm">
@@ -269,11 +285,24 @@ export default function Inspection() {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700">
+            <label className="block text-sm font-medium">
+              Feedback category
+              <select className={FIELD} value={feedbackCat} onChange={e => setFeedbackCat(e.target.value)}>
+                {FEEDBACK_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              </select>
+            </label>
+            {feedbackCat === 'False positive' && (
+              <p className="text-xs text-amber-500 mt-1">
+                Image will be copied to <code>data/false_positives/</code> for future review.
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium">
               Review note <span className="text-red-500">*</span>
             </label>
             <textarea
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className={FIELD}
               rows={3} placeholder="Reason for decision…" value={reviewNote}
               onChange={e => setReviewNote(e.target.value)}
             />

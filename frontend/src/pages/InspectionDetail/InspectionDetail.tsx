@@ -19,6 +19,7 @@ export default function InspectionDetailPage() {
   const [showOverlay, setShowOverlay] = useState(true)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [reviewDecision, setReviewDecision] = useState<'Approved' | 'Rejected'>('Approved')
+  const [feedbackCat, setFeedbackCat] = useState('Correct detection')
   const [reviewNote, setReviewNote] = useState('')
   const [reviewing, setReviewing] = useState(false)
   const [reviewed, setReviewed] = useState(false)
@@ -36,7 +37,7 @@ export default function InspectionDetailPage() {
     if (!detail || !reviewNote.trim()) return
     setReviewing(true)
     try {
-      await reviewInspection(detail.id, reviewDecision, reviewNote)
+      await reviewInspection(detail.id, reviewDecision, reviewNote, feedbackCat)
       setReviewed(true)
       setReviewOpen(false)
       // Refresh
@@ -274,6 +275,20 @@ export default function InspectionDetailPage() {
                 </label>
               ))}
             </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700">
+              Feedback category
+              <select
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                value={feedbackCat}
+                onChange={e => setFeedbackCat(e.target.value)}
+              >
+                {['Correct detection', 'False positive', 'False negative', 'Incorrect localization', 'Incorrect class', 'Uncertain'].map(c => (
+                  <option key={c}>{c}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700">
