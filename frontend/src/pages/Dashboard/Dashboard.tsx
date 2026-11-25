@@ -14,9 +14,13 @@ export default function Dashboard() {
  useEffect(load, [])
  if (err) return <ErrorState message="Couldn't load inspections" onRetry={load}/>
  if (!rows) return <LoadingState/>
- const pass = rows.filter(r => r.status === 'pass').length; const avg = Math.round(rows.reduce((s, r) => s + r.score, 0) / rows.length)
- return <div className="space-y-6"><div><h1 className="text-xl font-semibold">Dashboard</h1><p className="text-sm text-slate-500">Sample data — backend not connected.</p></div>
-  <div className="grid grid-cols-2 gap-4 xl:grid-cols-4"><StatCard label="Inspections" value={String(rows.length)}/><StatCard label="Pass rate" value={`${Math.round(pass/rows.length*100)}%`} hint={`${rows.length-pass} failed or under review`}/><StatCard label="Anomaly detection rate" value={`${Math.round((rows.length-pass)/rows.length*100)}%`}/><StatCard label="Average quality score" value={String(avg)}/></div>
+ const total = rows.length
+ const pass = rows.filter(r => r.status === 'pass').length
+ const avg = total ? Math.round(rows.reduce((s, r) => s + r.score, 0) / total) : 0
+ const passRate = total ? Math.round(pass / total * 100) : 0
+ const anomalyRate = total ? Math.round((total - pass) / total * 100) : 0
+ return <div className="space-y-6"><div><h1 className="text-xl font-semibold">Dashboard</h1><p className="text-sm text-slate-500">Live inspection overview connected to CLOCKIT API.</p></div>
+  <div className="grid grid-cols-2 gap-4 xl:grid-cols-4"><StatCard label="Inspections" value={String(total)}/><StatCard label="Pass rate" value={`${passRate}%`} hint={`${total-pass} failed or under review`}/><StatCard label="Anomaly detection rate" value={`${anomalyRate}%`}/><StatCard label="Average quality score" value={String(avg)}/></div>
   <div className="grid gap-4 lg:grid-cols-3"><section className="rounded-lg border border-slate-200 bg-white p-4 lg:col-span-2"><h2 className="mb-2 font-medium">Inspection activity, last 7 days</h2>
    <div className="h-60"><ResponsiveContainer><LineChart data={trend}><XAxis dataKey="day"/><YAxis/><Tooltip/><Line dataKey="inspections" stroke="#2563eb" strokeWidth={2}/><Line dataKey="anomalies" stroke="#dc2626" strokeWidth={2}/></LineChart></ResponsiveContainer></div></section>
    <section className="rounded-lg border border-slate-200 bg-white p-4"><h2 className="mb-2 font-medium">Anomaly distribution</h2><div className="h-48"><ResponsiveContainer><PieChart><Pie data={distribution} dataKey="value" nameKey="name" innerRadius={40} outerRadius={70}>{distribution.map((_, i) => <Cell key={i} fill={colors[i]}/>)}</Pie><Tooltip/></PieChart></ResponsiveContainer></div>
