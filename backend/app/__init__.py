@@ -1,0 +1,1 @@
+"""CLOCKIT FastAPI application package."""

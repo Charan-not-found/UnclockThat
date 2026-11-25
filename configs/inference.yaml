@@ -1,0 +1,15 @@
+defaults:
+  batch_size: 1
+  image_size: 512
+  precision: auto
+  fail_on_missing_required_stage: true
+
+models:
+  efficientad:
+    enabled: true
+  yolo11n_seg:
+    enabled: true
+  mobilenet_v3:
+    enabled: true
+  patchcore:
+    enabled: false

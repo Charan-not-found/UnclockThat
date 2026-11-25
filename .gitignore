@@ -1,1 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
 .venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Frontend
+node_modules/
+dist/
+
+# Model weights and engines
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+*.engine
+
+# Local datasets
+data/raw/*
+data/processed/*
+data/train/*
+data/validation/*
+data/test/*
+!data/**/.gitkeep
+
+# Generated artifacts
+artifacts/pretrained/*
+artifacts/trained/*
+artifacts/checkpoints/*
+artifacts/feature_banks/*
+artifacts/calibration/*
+artifacts/evaluations/*
+!artifacts/**/.gitkeep
+
+# User files and runtime output
+storage/uploads/*
+storage/inspection_results/*
+storage/reports/*
+storage/temporary/*
+!storage/**/.gitkeep
+*.log
+logs/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

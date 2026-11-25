@@ -1,0 +1,18 @@
+execution:
+  device: auto
+  inference_mode: sequential
+  max_concurrent_inspections: 1
+  max_concurrent_training_jobs: 1
+
+gpu:
+  enabled: true
+  allow_fp16: true
+  reserve_vram_mb: 768
+
+cpu:
+  dataloader_workers: 2
+
+memory:
+  lazy_model_loading: true
+  unload_after_stage: true
+  max_image_pixels: 25000000

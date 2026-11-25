@@ -1,0 +1,12 @@
+training:
+  max_concurrent_jobs: 1
+  checkpoint_interval_epochs: 5
+  save_best_checkpoint: true
+  require_validation_split: true
+  require_held_out_test_evaluation: true
+  auto_deploy: false
+
+resources:
+  device: auto
+  dataloader_workers: 1
+  mixed_precision: true
