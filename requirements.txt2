@@ -1,0 +1,67 @@
+# CLOCKIT - application, data and ML dependencies
+# Python 3.12 recommended.
+# PyTorch is installed separately by install_clockit.bat so you can choose
+# a CPU or CUDA build appropriate for your machine.
+
+# Core data and scientific computing
+numpy
+pandas
+polars
+scipy
+scikit-learn
+statsmodels
+joblib
+
+# Computer vision and image processing
+opencv-python
+Pillow
+albumentations
+timm
+
+# Industrial anomaly detection
+anomalib
+
+# Time-series and tabular anomaly detection
+pyod
+einops
+ruptures
+xgboost
+lightgbm
+
+# Segmentation model toolkit (optional model architectures)
+segmentation-models-pytorch
+
+# Explainability, calibration and model evaluation
+shap
+captum
+optuna
+mlflow
+tensorboard
+evidently
+
+# Backend API
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-multipart
+httpx
+
+# SQLite database layer (SQLite itself is included with Python)
+sqlalchemy
+alembic
+
+# Background jobs / caching (optional for prototype; Redis server is separate)
+redis
+celery
+
+# Utilities
+python-dotenv
+PyYAML
+orjson
+
+# Testing and code quality
+pytest
+pytest-cov
+ruff
+mypy
