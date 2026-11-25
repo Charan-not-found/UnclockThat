@@ -1,16 +1,156 @@
+/**
+ * AI Models registry — lifecycle-aware, real data only.
+ * No records created on load. Downloaded weights shown as "not ready" until trained.
+ */
 import { useEffect, useState } from 'react'
+import { RefreshCw, Info } from 'lucide-react'
+import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
-import { LoadingState } from '../../components/common/LoadingState'
+import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import { listModels, toggleModel } from '../../services/modelService'
 import type { ModelInfo } from '../../types'
+
+const FAMILY_LABEL: Record<string, string> = {
+  efficientad:      'EfficientAD (Anomaly)',
+  yolo_seg:         'YOLO-Seg (Localisation)',
+  patchcore:        'PatchCore (Anomaly)',
+  mobilenet:        'MobileNet (Classification)',
+  opencv_heuristic: 'OpenCV Heuristic (Prototype)',
+}
+
 export default function Models() {
- const [rows, setRows] = useState<ModelInfo[]>()
- useEffect(() => { listModels().then(setRows) }, [])
- if (!rows) return <LoadingState/>
- const toggle = async (id: string) => {
-  const updated = await toggleModel(id)
-  setRows(rows.map(m => m.id === id ? updated : m))
- }
- return <div className="space-y-4"><h1 className="text-xl font-semibold">Models</h1><div className="overflow-x-auto rounded-lg border border-slate-200 bg-white"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-slate-500"><tr>{['Name','Task','Version','Accuracy','Status',''].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
-  <tbody>{rows.map(m => <tr key={m.id} className="border-t border-slate-100"><td className="px-3 py-2 font-medium">{m.name}</td><td className="px-3">{m.task}</td><td className="px-3">{m.version}</td><td className="px-3">{m.accuracy}%</td><td className="px-3"><StatusBadge value={m.enabled ? 'pass' : 'none'}/></td>
-   <td className="px-3 text-right"><button onClick={() => toggle(m.id)} className="text-blue-600">{m.enabled ? 'Disable' : 'Enable'}</button></td></tr>)}</tbody></table></div></div> }
+  const [models, setModels] = useState<ModelInfo[]>()
+  const [err, setErr] = useState(false)
+  const [toggling, setToggling] = useState<string>()
+
+  const load = () => {
+    setErr(false)
+    setModels(undefined)
+    listModels().then(setModels).catch(() => setErr(true))
+  }
+
+  useEffect(load, [])
+
+  const handleToggle = async (m: ModelInfo) => {
+    setToggling(m.id)
+    try {
+      const updated = await toggleModel(m.id)
+      setModels(prev => prev?.map(x => x.id === m.id ? updated : x))
+    } catch {
+      /* keep existing state */
+    } finally {
+      setToggling(undefined)
+    }
+  }
+
+  if (!models && !err) return <LoadingState message="Loading model registry…" />
+  if (err) return <ErrorState message="Failed to load model registry" onRetry={load} />
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3 page-header">
+        <div>
+          <h1>AI Models</h1>
+          <p>{models?.length ?? 0} model configuration{models?.length !== 1 ? 's' : ''} registered.</p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>
+      </div>
+
+      {/* Important disclaimer */}
+      <div className="card px-4 py-3 bg-blue-50 border-blue-200">
+        <div className="flex items-start gap-2">
+          <Info size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
+          <div className="text-xs text-blue-800 space-y-1">
+            <p><strong>Model readiness:</strong> Downloaded weight files (EfficientAD, YOLO) are listed as <em>Disabled</em> — they require training/fine-tuning before inference. Only the OpenCV Heuristic is currently <em>Ready</em> (active).</p>
+            <p>To register new models or run seeds, use <code className="bg-blue-100 px-1 rounded">POST /api/v1/admin/seed</code>.</p>
+          </div>
+        </div>
+      </div>
+
+      {models?.length === 0 ? (
+        <div className="card">
+          <EmptyState
+            title="No models registered"
+            body="Run the admin seed to register the downloaded pretrained weights."
+            action={
+              <a href="/admin" className="text-sm text-blue-600 hover:underline">Go to Administration →</a>
+            }
+          />
+        </div>
+      ) : (
+        <section className="card">
+          <div className="overflow-x-auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th><th>Family</th><th>Task</th><th>Version</th>
+                  <th>State</th><th>Weights</th><th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {models?.map(m => (
+                  <tr key={m.id}>
+                    <td className="font-medium">{m.name}</td>
+                    <td className="text-slate-500 text-xs">{FAMILY_LABEL[m.model_family] ?? m.model_family}</td>
+                    <td className="text-slate-500">{m.task}</td>
+                    <td className="tabular-nums font-mono text-xs">{m.version}</td>
+                    <td><StatusBadge value={m.state} /></td>
+                    <td>
+                      {m.weights_path ? (
+                        <span className={`text-xs font-medium ${m.has_weights_file ? 'text-green-700' : 'text-red-600'}`}>
+                          {m.has_weights_file ? '✓ Present' : '✗ Missing'}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-400">N/A</span>
+                      )}
+                    </td>
+                    <td>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        loading={toggling === m.id}
+                        onClick={() => handleToggle(m)}
+                      >
+                        {m.enabled ? 'Disable' : 'Enable'}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Detail cards for downloaded weights */}
+      {models && models.filter(m => m.weights_path).length > 0 && (
+        <section>
+          <h2 className="text-sm font-medium text-slate-700 mb-2">Registered artifact details</h2>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {models.filter(m => m.weights_path).map(m => (
+              <div key={m.id} className="card p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-medium text-sm">{m.name}</p>
+                  <StatusBadge value={m.state} size="sm" />
+                </div>
+                <p className="text-xs text-slate-400 mt-1">{m.task}</p>
+                <div className="mt-2 text-xs space-y-1">
+                  <div>
+                    <span className="text-slate-400">Weights file: </span>
+                    <span className="font-mono break-all">{m.weights_path || '—'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">File on disk: </span>
+                    <span className={m.has_weights_file ? 'text-green-700' : 'text-red-600'}>
+                      {m.has_weights_file ? 'Present' : 'Not found'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}

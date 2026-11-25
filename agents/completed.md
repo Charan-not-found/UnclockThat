@@ -1,114 +1,192 @@
-# CLOCKIT / PROMETHEUS-X — Completed Project Details
+# CLOCKIT / PROMETHEUS-X — Implementation Status
+_Last updated: 2026-11-25_
 
-**Last updated:** 2026-11-25  
-**Architecture reference:** `agents/CLOCKIT_Technical_Architecture.md`  
-**Database file:** `clockit.db` (SQLite, auto-initialized at repository root)
+## Project Overview
+Industrial AI quality-inspection platform. Modular monolith, SQLite-first (migration-ready), React + TypeScript frontend, FastAPI backend.
 
----
-
-## 1. Repository Layout & Configuration
-
-### Top-Level Files & Directories
-- `.gitignore`: Excludes Python caches, `.venv/`, `.env`, `node_modules/`, `dist/`, model weights (`*.pt`, `*.pth`, `*.onnx`, `*.ckpt`, `*.safetensors`, `*.engine`), datasets (`data/*/*`), artifacts (`artifacts/*/*`), runtime storage (`storage/*/*`), and local databases (`*.db`, `*.sqlite`, `*.sqlite3`), while preserving `.gitkeep` files.
-- `.env.example`: Default environment template (`APP_NAME=CLOCKIT`, `APP_ENV=development`, `APP_DEBUG=true`, `API_V1_PREFIX=/api/v1`, `DATABASE_URL=sqlite:///./clockit.db`, `DATA_ROOT=./data`, `ARTIFACT_ROOT=./artifacts`, `STORAGE_ROOT=./storage`, `DEFAULT_DEVICE=auto`, `LOG_LEVEL=INFO`, `MAX_UPLOAD_MB=50`).
-- `requirements.txt`: Python dependencies including `numpy==2.5.5`, `opencv-python==5.1.0.95`, `sqlalchemy>=2.0`, `alembic>=1.13` (plus `fastapi`, `uvicorn`, `pydantic`, `pydantic-settings`, `pyyaml`, `pytest`, `httpx` installed in `.venv`).
-- `configs/`:
-  - `configs/hardware.yaml`: `device: auto`, `inference_mode: sequential`, `max_concurrent_inspections: 1`, `max_concurrent_training_jobs: 1`, `reserve_vram_mb: 768`, `lazy_model_loading: true`, `unload_after_stage: true`.
-  - `configs/inference.yaml`: `batch_size: 1`, `image_size: 512`, `precision: auto`, model flags (`efficientad`, `yolo11n_seg`, `mobilenet_v3` enabled; `patchcore` disabled).
-  - `configs/training.yaml`: `max_concurrent_jobs: 1`, `checkpoint_interval_epochs: 5`, `auto_deploy: false`, `mixed_precision: true`.
-- Runtime storage directories (with `.gitkeep` placeholders):
-  - `data/`: `raw/`, `processed/`, `train/`, `validation/`, `test/`
-  - `artifacts/`: `pretrained/`, `trained/`, `checkpoints/`, `feature_banks/`, `calibration/`, `evaluations/`
-  - `storage/`: `uploads/`, `inspection_results/`, `reports/`, `temporary/`
-- `agents/`: Modular agent specifications (`platform-api.md`, `data-intelligence.md`, `anomaly-detection-localization.md`, `severity-confidence-shift.md`, `workflow-execution-engine.md`, `decision-aggregation-review.md`, `frontend-management-ui.md`, `infra-observability.md`), `CLOCKIT_Technical_Architecture.md`, and `completed.md`.
+**Stack:**
+- Backend: Python 3.12, FastAPI, SQLAlchemy (ORM), SQLite (`clockit.db`), Pydantic v2, uvicorn
+- Frontend: React 18, TypeScript, Vite 5, Tailwind CSS, React Router v6, Axios, Recharts, Lucide
+- Venv: `.venv` (Python 3.12.10)
+- Node: v25.2.1 (use `npm.cmd`)
 
 ---
 
-## 2. Backend (`backend/app/`)
+## ✅ Completed & Verified
 
-### Core & Application Entry (`backend/app/core/`, `backend/app/main.py`)
-- `backend/app/core/config.py`: `Settings` (`pydantic_settings.BaseSettings`) loading `.env` and exposing `get_settings()` (cached via `@lru_cache`).
-- `backend/app/core/logging.py`: `setup_logging(level)` configuring stdout logging format.
-- `backend/app/main.py`: `create_app()` creates the FastAPI app with:
-  - `lifespan` handler calling `setup_logging()`, `init_db()` (creates runtime dirs and SQLite tables).
-  - `CORSMiddleware` allowing `http://localhost:5173`, `http://127.0.0.1:5173`, and `http://localhost:3000`.
-  - `api_router` mounted at `/api/v1`.
+### Backend — `backend/app/`
 
-### Database Layer (`backend/app/database/`)
-Built with portable SQLAlchemy 2.0 ORM types (`Integer`, `String`, `Text`, `Float`, `Boolean`, `DateTime(timezone=True)`, `JSON`) so `DATABASE_URL` can switch from SQLite to PostgreSQL or MySQL without rewriting models or repositories.
-- `backend/app/database/base.py`: `Base(DeclarativeBase)`.
-- `backend/app/database/connection.py`:
-  - `engine` created from `settings.database_url` (only applies `check_same_thread=False` and `PRAGMA foreign_keys=ON` when `DATABASE_URL` starts with `sqlite`).
-  - `SessionLocal`, `ensure_runtime_dirs()`, `init_db()`, `get_db()`, `session_scope()`.
-- `backend/app/database/models/` (7 tables in `clockit.db`):
-  1. `manufacturer_profiles` (`ManufacturerProfile` in `manufacturer.py`): `id`, `name`, `industry`, `plant_location`, `contact_email`, `metadata_json`, `created_at`, `updated_at`.
-  2. `users` (`User` in `manufacturer.py`): `id`, `manufacturer_id` (FK), `username`, `email`, `hashed_password`, `role`, `is_active`, `created_at`.
-  3. `model_configs` (`ModelConfig` in `model_config.py`): `id`, `manufacturer_id` (FK), `name`, `model_family`, `version`, `dataset_dir_path`, `weights_file_path`, `hyperparameters_json`, `metrics_json`, `is_active`, `created_at`.
-  4. `pipeline_configs` (`PipelineConfig` in `pipeline.py`): `id`, `manufacturer_id` (FK), `name`, `version`, `description`, `modules_json`, `thresholds_json`, `is_active`, `created_at`.
-  5. `inspection_records` (`InspectionRecord` in `inspection.py`): `id`, `manufacturer_id` (FK), `user_id` (FK), `pipeline_config_id` (FK), `product_serial`, `station_name`, `image_file_path`, `status`, `overall_decision`, `quality_score`, `inspected_at`.
-  6. `anomaly_results` (`AnomalyResult` in `inspection.py`): `id`, `inspection_id` (FK), `model_config_id` (FK), `anomaly_score`, `confidence_score`, `is_anomalous`, `heatmap_file_path`, `mask_file_path`, `bounding_boxes_json`, `processing_time_ms`, `created_at`.
-  7. `severity_scores` (`SeverityScore` in `inspection.py`): `id`, `inspection_id` (FK), `anomaly_result_id` (FK), `severity_level`, `numeric_score`, `affected_area_ratio`, `rule_notes`, `requires_human_review`, `created_at`.
-- `backend/app/database/repositories/`:
-  - `base.py`: `BaseRepository` (`create`, `get_by_id`, `list_all`, `update`, `delete`).
-  - `model_repository.py`: `ManufacturerRepository`, `UserRepository`, `ModelConfigRepository`.
-  - `pipeline_repository.py`: `PipelineConfigRepository`.
-  - `inspection_repository.py`: `InspectionRepository` (includes `get_with_results`, `list_by_manufacturer`), `AnomalyResultRepository`, `SeverityScoreRepository` (includes `list_requiring_review`).
+#### API layer (`backend/app/api/`)
 
-### Pydantic Schemas (`backend/app/schemas/`)
-- `common.py`: `HealthResponse`, `MessageResponse`.
-- `results.py`: `DefectDetectionSchema`, `ModelUsageSchema`, `InspectionResultSchema`.
+| File | Routes | Status |
+|---|---|---|
+| `v1/health.py` | `GET /api/v1/health` | ✅ |
+| `v1/inspections.py` | `GET /inspections`, `GET /inspections/review-queue`, `GET /inspections/{id}`, `POST /inspections`, `POST /inspections/{id}/review`, `POST /inspections/{id}/confirm` | ✅ |
+| `v1/models.py` | `GET /models`, `GET /models/{id}`, `PATCH /models/{id}/toggle` | ✅ Fixed: GET no longer creates records |
+| `v1/pipelines.py` | `GET /pipelines`, `GET /pipelines/{id}`, `POST /pipelines`, `PATCH /pipelines/{id}/toggle` | ✅ |
+| `v1/analytics.py` | `GET /analytics/summary`, `GET /analytics/trend`, `GET /analytics/severity-distribution`, `GET /analytics/status-distribution` | ✅ |
+| `v1/admin.py` | `POST /admin/seed` | ✅ |
+| `router.py` | Registers all above routers at `/api/v1` prefix | ✅ |
 
-### API Endpoints (`backend/app/api/`)
-Registered in `backend/app/api/router.py` under `/api/v1`:
-- `GET /api/v1/health` (`v1/health.py`): Executes `SELECT 1` against SQLite and returns `HealthResponse` (`status`, `app_name`, `environment`, `database_connected`, `timestamp`).
-- `GET /api/v1/inspections` (`v1/inspections.py`): Returns persisted inspections ordered by `inspected_at` descending (`id` as `INS-<id>`, `date`, `industry`, `product`, `pipeline`, `status`, `score`, `severity`, `defects`).
-- `POST /api/v1/inspections` (`v1/inspections.py`): Accepts multipart form (`industry`, `product`, `pipelineId`, `threshold`, `fileName`, `file`), saves the uploaded image to `storage/uploads/<uuid><ext>`, runs OpenCV Gaussian-blur contrast/contour analysis (`_analyze_image_bytes`), and persists `InspectionRecord`, `AnomalyResult`, and `SeverityScore` in SQLite.
-- `POST /api/v1/inspections/{inspection_id}/confirm` (`v1/inspections.py`): Marks `requires_human_review = False` and records operator review note.
-- `GET /api/v1/models` (`v1/models.py`): Lists registered `ModelConfig` entries; auto-seeds `Default Manufacturer` and 3 default models (`PatchCore-v2`, `DefectNet`, `SegLocalizer`) if the table is empty.
-- `PATCH /api/v1/models/{model_id}/toggle` (`v1/models.py`): Toggles `is_active` in SQLite and returns updated `ModelInfoOut`.
+**Key spec compliance fixes applied:**
+- `GET /models` no longer calls `_ensure_default_models()` — spec violation removed
+- Severity vocabulary corrected: **Informational / Minor / Major / Critical** (was low/medium/high)
+- Status vocabulary corrected: **Completed / Failed / Needs review / Approved / Rejected** (was pass/fail/review)
+- Review endpoint `POST /inspections/{id}/review` requires `decision` + mandatory `note`
+- All GET endpoints are pure reads — no side effects
 
----
+#### Database layer (`backend/app/database/`)
 
-## 3. Frontend (`frontend/`)
+| File | Contents | Tables |
+|---|---|---|
+| `models/manufacturer.py` | `ManufacturerProfile`, `User` | manufacturer_profiles, users |
+| `models/model_config.py` | `ModelConfig` | model_configs |
+| `models/pipeline.py` | `PipelineConfig` | pipeline_configs |
+| `models/inspection.py` | `InspectionRecord`, `AnomalyResult`, `SeverityScore` | inspection_records, anomaly_results, severity_scores |
+| `repositories/base.py` | `BaseRepository[T]` with CRUD | — |
+| `repositories/model_repository.py` | `ManufacturerRepository`, `UserRepository`, `ModelConfigRepository` | — |
+| `repositories/pipeline_repository.py` | `PipelineConfigRepository` | — |
+| `repositories/inspection_repository.py` | `InspectionRepository`, `AnomalyResultRepository`, `SeverityScoreRepository` | — |
+| `connection.py` | Engine, `init_db()`, `get_db()`, `session_scope()` | — |
+| `base.py` | `Base(DeclarativeBase)` | — |
 
-- **Stack:** React 18, TypeScript, Vite 5, Tailwind CSS, React Router v6, Axios, Recharts, Lucide React (`node_modules` installed via `npm.cmd --prefix frontend install`).
-- **API Integration:**
-  - `frontend/src/services/api.ts`: `USE_MOCK = false`, `baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1'`.
-  - `frontend/vite.config.ts`: Configured `/api` dev proxy to `http://127.0.0.1:8000`.
-  - `frontend/src/vite-env.d.ts`: Added Vite client types for `import.meta.env`.
-  - `frontend/src/services/inspectionService.ts`: `listInspections()`, `runInspection(req, file?)` sending `FormData` to `POST /inspections`, and `confirmInspection(id)`.
-  - `frontend/src/services/modelService.ts`: `listModels()` and `toggleModel(id)` calling `PATCH /models/{id}/toggle`.
-- **Connected Pages:**
-  - `frontend/src/pages/Dashboard/Dashboard.tsx`: Fetches live inspections, handles empty state (`0` inspections without `NaN`), and displays summary cards, charts, and recent inspections.
-  - `frontend/src/pages/Inspection/Inspection.tsx`: Uploads image via `FormData`, displays bounding boxes/heatmap overlay and scores returned by FastAPI, and persists confirmation via `confirmInspection`.
-  - `frontend/src/pages/InspectionHistory/InspectionHistory.tsx`: Fetches live inspection history with search, status/industry/severity filters, detail drawer, and CSV export.
-  - `frontend/src/pages/Models/Models.tsx`: Lists models from SQLite and persists Enable/Disable toggles via `toggleModel`.
-  - `frontend/src/pages/Placeholder/Placeholder.tsx`: Placeholder routes for `/pipelines`, `/datasets`, `/training`, `/analytics`, and `/settings`.
+**DB:** `clockit.db` at repo root, auto-initialized, 7 tables.
+
+#### Core (`backend/app/core/`)
+- `config.py` — `Settings` via pydantic-settings; `DATABASE_URL` env var; `storage_root`, `artifact_root`, `data_root`
+- `logging.py` — structured stdout logging
+
+#### Static files
+- `GET /uploads/{filename}` — serves uploaded inspection images from `storage/uploads/`
 
 ---
 
-## 4. Verification & How to Run
+### Frontend — `frontend/src/`
 
-### Verified Checks
-- **Backend tests:** `.\.venv\Scripts\python.exe -m pytest backend/tests -v` → **3 passed** (`test_fastapi_app_routes_registered`, `test_health_check_handler`, `test_database_tables_and_repository_crud`).
-- **Frontend build:** `npm.cmd --prefix frontend run build` (`tsc && vite build`) → **built cleanly** into `frontend/dist/` (`15.46s`).
+#### Design system
+- `styles/globals.css` — full CSS design token system: `--color-*`, `--space-*`, `--radius-*`, `--shadow-*`; tabular numerals; card/table/page-header utilities; light/dark theme via `@media (prefers-color-scheme: dark)`
 
-### Run Locally
-1. **Backend:**
-   ```powershell
-   .\.venv\Scripts\uvicorn.exe backend.app.main:app --reload --port 8000
-   ```
-   - Swagger UI: `http://127.0.0.1:8000/docs`
-   - Health: `http://127.0.0.1:8000/api/v1/health`
-2. **Frontend:**
-   ```powershell
-   npm.cmd --prefix frontend run dev
-   ```
-   - Web UI: `http://localhost:5173`
+#### Services (all real API, no mock)
+| File | Endpoints called |
+|---|---|
+| `services/api.ts` | Axios client + error classifier (NETWORK_UNAVAILABLE, UNAUTHORIZED, etc.) |
+| `services/inspectionService.ts` | list, get, reviewQueue, run, review, confirm |
+| `services/modelService.ts` | list, get, toggle |
+| `services/pipelineService.ts` | list, get, create, toggle |
+| `services/analyticsService.ts` | summary, trend, severityDist, statusDist |
+| `services/adminService.ts` | seed |
+
+#### Shared components
+| Component | Description |
+|---|---|
+| `StatusBadge` | All spec status + severity labels with dot + color + text |
+| `Button` | primary / secondary / danger / ghost variants, loading state |
+| `StatCard` | KPI card with accent colors |
+| `LoadingState`, `ErrorState`, `EmptyState` | All data states covered |
+| `Modal` | Accessible dialog with confirm/cancel |
+
+#### Pages (all wired to real APIs)
+| Page | Route | Description |
+|---|---|---|
+| Dashboard | `/` | Live stats from analytics API + recent inspections. No mock data. |
+| New Inspection | `/inspect` | File upload → `POST /inspections`. OpenCV heuristic disclaimer. Review modal. |
+| Inspection History | `/history` | Server data, client-side filter by status/search |
+| **Inspection Detail** | `/inspections/:id` | Evidence viewer, per-stage anomaly results, human review panel |
+| **Review Queue** | `/review` | Dedicated queue from `/inspections/review-queue`, sorted by severity |
+| **Pipelines** | `/pipelines` | List + create + toggle, stage detail cards |
+| AI Models | `/models` | Lifecycle-aware registry, weights-file presence check, no auto-seed |
+| Datasets | `/datasets` | Unavailable (Milestone 3) — clearly labelled |
+| Training | `/training` | Unavailable (Milestone 5) — clearly labelled |
+| **Analytics** | `/analytics` | Server-computed charts with metric definitions + denominators |
+| **Administration** | `/admin` | Seed database, planned features roadmap |
+| Settings | `/settings` | Environment info, planned settings roadmap |
+
+**New pages in bold** = added in this session.
+
+#### Router
+`app/router.tsx` — 12 routes, all wired to real page components. Placeholder removed.
 
 ---
 
-## 5. Remaining Work (Not Yet Implemented)
-- **AI Model Subsystem (`backend/app/models/`):** `BaseModel` interface, `ModelRegistry`, `ModelLoader`, and adapters for `EfficientAD`, `PatchCore`, `YOLO11n-seg`, `MobileNetV3`, `Severity`, and `Confidence` calibration (currently using the OpenCV heuristic in `v1/inspections.py`).
-- **Model Weights (`artifacts/`):** Only `.gitkeep` placeholders exist; no `.pt`/`.pth` weights are downloaded or trained yet.
-- **Additional ORM Entities & Subsystems:** `industry`, `product`, `dataset`, `training_job`, `model_version`, `feedback`, orchestration engine, training pipeline, evaluation metrics, and result fusion (Phases 2–7 of `CLOCKIT_Technical_Architecture.md`).
+### Tests — `backend/tests/`
+
+| Test | Status |
+|---|---|
+| `test_fastapi_app_routes_registered` | ✅ Verifies all 7 route families present |
+| `test_health_check_handler` | ✅ Returns `status=ok database_connected=True` |
+| `test_database_tables_and_repository_crud` | ✅ All 7 tables + full CRUD + cascade |
+| `test_analytics_routes_respond` | ✅ analytics/summary returns valid schema |
+| `test_pipelines_route_read_only` | ✅ GET /pipelines creates 0 records |
+| `test_models_route_read_only` | ✅ GET /models creates 0 records (spec fix verified) |
+
+**Run:** `.\.venv\Scripts\python.exe -m pytest backend/tests -v`
+
+---
+
+### Build verification
+
+```
+Backend:  python -c "from backend.app.main import app; print('OK')"  → OK
+Frontend: npm.cmd --prefix frontend run build                        → ✓ built in 8.84s
+Tests:    pytest backend/tests -v                                    → 6 passed
+```
+
+---
+
+## 🔧 Known Limitations & Technical Debt
+
+| Item | Detail |
+|---|---|
+| Image display in Inspection Detail | Served via `/uploads/{filename}` static route — works when backend running |
+| OpenCV heuristic only | No real AI model runs inference yet. EfficientAD/YOLO require training first |
+| No auth | No JWT / session / role enforcement. All endpoints open |
+| Severity in existing DB rows | Pre-fix rows may have old vocabulary (low/medium/high) |
+| Analytics severity query | Pulls all severity_scores rows; needs index for large datasets |
+| mockData.ts | Emptied stub — delete in Milestone 1 cleanup |
+
+---
+
+## 🗂️ Artifact Locations
+
+| Artifact | Path |
+|---|---|
+| SQLite database | `clockit.db` |
+| Uploaded images | `storage/uploads/` |
+| Pretrained weights | `artifacts/pretrained/pretrained_teacher_small.pth`, `pretrained_teacher_medium.pth`, `yolo11n-seg.pt` |
+| Frontend build | `frontend/dist/` |
+
+---
+
+## 🚀 Run Commands
+
+```powershell
+# Backend
+.\.venv\Scripts\uvicorn.exe backend.app.main:app --reload --port 8000
+
+# Frontend dev server
+npm.cmd --prefix frontend run dev
+
+# Run tests
+.\.venv\Scripts\python.exe -m pytest backend/tests -v
+
+# Seed database (after backend starts)
+curl -X POST http://localhost:8000/api/v1/admin/seed
+
+# Production frontend build
+npm.cmd --prefix frontend run build
+```
+
+---
+
+## 📋 Milestone Roadmap
+
+| Milestone | Status | Description |
+|---|---|---|
+| M0 — UI Foundation | ✅ **Done** | Design tokens, shell, navigation, shared components, API client |
+| M1 — Inspection workflow | ✅ **Done** | Upload, run, persist, detail view, review, history |
+| M2 — Model registry | ✅ **Done** | Lifecycle-aware registry, real weight file checks |
+| M3 — Dataset management | 🔲 Planned | Multi-step upload, versioning, leakage detection |
+| M4 — Pipeline builder | 🔲 Planned | Stage editor, immutable versions |
+| M5 — Training & evaluation | 🔲 Planned | Real training jobs, checkpoint management |
+| M6 — Analytics & reports | ✅ **Done** | Server-driven charts with definitions |
+| M7 — Production hardening | 🔲 Planned | Auth, tenant isolation, audit log, accessibility |

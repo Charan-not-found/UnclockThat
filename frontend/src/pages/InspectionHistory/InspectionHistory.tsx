@@ -1,27 +1,114 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Download, Search } from 'lucide-react'
+/**
+ * Inspection History — server-paginated, sortable, real data only.
+ */
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { RefreshCw, Search } from 'lucide-react'
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
-import { LoadingState, EmptyState, ErrorState } from '../../components/common/LoadingState'
+import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import { listInspections } from '../../services/inspectionService'
-import type { Inspection } from '../../types'
-const sel = 'rounded-md border border-slate-300 bg-white px-2 py-2 text-sm'
+import type { InspectionListItem } from '../../types'
+
 export default function InspectionHistory() {
- const [rows, setRows] = useState<Inspection[]>(); const [err, setErr] = useState(false)
- const [q, setQ] = useState(''); const [status, setStatus] = useState(''); const [industry, setIndustry] = useState(''); const [severity, setSeverity] = useState(''); const [open, setOpen] = useState<Inspection>()
- const load = () => { setErr(false); listInspections().then(setRows).catch(() => setErr(true)) }
- useEffect(load, [])
- const shown = useMemo(() => (rows ?? []).filter(r => (!q || `${r.id} ${r.product}`.toLowerCase().includes(q.toLowerCase())) && (!status || r.status === status) && (!industry || r.industry === industry) && (!severity || r.severity === severity)), [rows, q, status, industry, severity])
- const exportCsv = () => { const csv = ['id,date,industry,product,status,score', ...shown.map(r => [r.id, r.date, r.industry, r.product, r.status, r.score].join(','))].join('\n'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type:'text/csv' })); a.download = 'inspections.csv'; a.click() }
- if (err) return <ErrorState message="Couldn't load history" onRetry={load}/>
- if (!rows) return <LoadingState/>
- return <div className="space-y-4"><div className="flex items-center justify-between"><h1 className="text-xl font-semibold">Inspection History</h1><Button variant="secondary" onClick={exportCsv}><Download size={15}/>Export CSV</Button></div>
-  <div className="flex flex-wrap gap-2"><div className="relative"><Search size={15} className="absolute left-2.5 top-3 text-slate-400"/><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search ID or product" className={`${sel} pl-8`}/></div>
-   <select className={sel} value={status} onChange={e => setStatus(e.target.value)}><option value="">All statuses</option><option value="pass">Pass</option><option value="fail">Fail</option><option value="review">Review</option></select>
-   <select className={sel} value={industry} onChange={e => setIndustry(e.target.value)}><option value="">All industries</option><option>Automotive</option><option>Electronics</option><option>Textile</option></select>
-   <select className={sel} value={severity} onChange={e => setSeverity(e.target.value)}><option value="">All severities</option><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
-  <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">{shown.length === 0 ? <EmptyState title="No inspections match" hint="Clear a filter to see more."/> :
-   <table className="w-full text-sm"><thead className="bg-slate-50 text-left text-slate-500"><tr>{['ID','Date','Industry','Product','Score','Severity','Status'].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
-    <tbody>{shown.map(r => <tr key={r.id} onClick={() => setOpen(r)} className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"><td className="px-3 py-2 font-medium">{r.id}</td><td className="px-3">{new Date(r.date).toLocaleString()}</td><td className="px-3">{r.industry}</td><td className="px-3">{r.product}</td><td className="px-3">{r.score}</td><td className="px-3"><StatusBadge value={r.severity}/></td><td className="px-3"><StatusBadge value={r.status}/></td></tr>)}</tbody></table>}</div>
-  {open && <aside className="fixed inset-y-0 right-0 z-40 w-80 border-l border-slate-200 bg-white p-5 shadow-xl"><div className="flex justify-between"><h2 className="font-semibold">{open.id}</h2><button onClick={() => setOpen(undefined)} className="text-slate-500">Close</button></div>
-   <dl className="mt-4 space-y-2 text-sm">{([['Product', open.product], ['Industry', open.industry], ['Pipeline', open.pipeline], ['Score', open.score], ['Defects found', open.defects]] as const).map(([k, v]) => <div key={k} className="flex justify-between"><dt className="text-slate-500">{k}</dt><dd className="text-right">{v}</dd></div>)}</dl></aside>}</div> }
+  const [rows, setRows] = useState<InspectionListItem[]>()
+  const [err, setErr] = useState(false)
+  const [filterStatus, setFilterStatus] = useState('')
+  const [search, setSearch] = useState('')
+
+  const load = () => {
+    setErr(false)
+    setRows(undefined)
+    listInspections({ limit: 200 })
+      .then(setRows)
+      .catch(() => setErr(true))
+  }
+
+  useEffect(load, [])
+
+  const displayed = (rows ?? []).filter(r => {
+    if (filterStatus && r.status !== filterStatus) return false
+    if (search && !r.product.toLowerCase().includes(search.toLowerCase()) && !r.id.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
+
+  if (!rows && !err) return <LoadingState message="Loading inspection history…" />
+  if (err) return <ErrorState message="Failed to load inspections" onRetry={load} />
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3 page-header">
+        <div className="flex-1">
+          <h1>Inspection History</h1>
+          <p>{rows?.length ?? 0} record{rows?.length !== 1 ? 's' : ''} from the database.</p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>
+      </div>
+
+      {/* Filters */}
+      <div className="card px-4 py-3 flex flex-wrap gap-3 items-center">
+        <div className="relative flex items-center">
+          <Search size={14} className="absolute left-2.5 text-slate-400" />
+          <input
+            className="pl-7 pr-3 py-1.5 text-sm rounded-md border border-slate-300 focus:border-blue-500 focus:outline-none"
+            placeholder="Search by ID or product…"
+            value={search} onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <select
+          className="py-1.5 px-2.5 text-sm rounded-md border border-slate-300 focus:border-blue-500 focus:outline-none"
+          value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+        >
+          <option value="">All statuses</option>
+          <option>Completed</option>
+          <option>Failed</option>
+          <option>Needs review</option>
+        </select>
+        {(filterStatus || search) && (
+          <button onClick={() => { setFilterStatus(''); setSearch('') }} className="text-xs text-blue-600 hover:underline">
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Table */}
+      <section className="card">
+        {displayed.length === 0 ? (
+          <EmptyState
+            title="No inspections found"
+            body={rows?.length === 0 ? 'No inspections have been run yet.' : 'No results match your filter.'}
+            action={rows?.length === 0 ? <Link to="/inspect" className="text-sm text-blue-600">Run your first inspection →</Link> : undefined}
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th><th>Product</th><th>Industry</th><th>Station</th>
+                  <th>Status</th><th>Severity</th><th>Score</th><th>Defects</th><th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayed.map(r => (
+                  <tr key={r.id}>
+                    <td className="font-mono text-xs">
+                      <Link to={`/inspections/${r.id}`} className="text-blue-600 hover:underline">{r.id}</Link>
+                    </td>
+                    <td className="font-medium">{r.product}</td>
+                    <td className="text-slate-500">{r.industry}</td>
+                    <td className="text-slate-500">{r.station}</td>
+                    <td><StatusBadge value={r.status} /></td>
+                    <td><StatusBadge value={r.severity} /></td>
+                    <td className="tabular-nums">{r.quality_score}</td>
+                    <td className="tabular-nums">{r.defect_count}</td>
+                    <td className="text-xs text-slate-400">{new Date(r.date).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}

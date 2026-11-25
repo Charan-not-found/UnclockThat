@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.router import api_router
 from backend.app.core.config import get_settings
@@ -19,6 +21,9 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     setup_logging(settings.log_level)
     init_db()
+    # Ensure storage dirs exist
+    for sub in ("uploads", "inspection_results", "reports", "temporary"):
+        (settings.storage_root / sub).mkdir(parents=True, exist_ok=True)
     yield
 
 
@@ -30,6 +35,8 @@ def create_app() -> FastAPI:
         debug=settings.app_debug,
         version="0.1.0",
         lifespan=lifespan,
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
     )
     application.add_middleware(
         CORSMiddleware,
@@ -43,6 +50,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     application.include_router(api_router, prefix=settings.api_v1_prefix)
+
+    # Serve uploaded images as static files so the inspection detail page can display them
+    uploads_dir = settings.storage_root / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    application.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+
     return application
 
 

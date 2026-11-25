@@ -1,4 +1,4 @@
-"""Inspection submission, listing, and human review confirmation endpoints."""
+"""Inspection submission, listing, detail, and human review endpoints."""
 
 from __future__ import annotations
 
@@ -28,6 +28,34 @@ from backend.app.database.repositories.pipeline_repository import PipelineConfig
 
 router = APIRouter(prefix="/inspections", tags=["inspections"])
 
+# ---------------------------------------------------------------------------
+# Spec-correct vocabulary
+# ---------------------------------------------------------------------------
+# Severity: Informational / Minor / Major / Critical  (not low/medium/high)
+# Status: Completed / Needs review / Approved / Rejected / Failed
+
+def _anomaly_to_severity(anomaly_score: float) -> str:
+    if anomaly_score >= 0.85:
+        return "Critical"
+    if anomaly_score >= 0.65:
+        return "Major"
+    if anomaly_score >= 0.45:
+        return "Minor"
+    return "Informational"
+
+
+def _decision_to_status(decision: str) -> str:
+    mapping = {
+        "PASS": "Completed",
+        "FAIL": "Failed",
+        "REVIEW_REQUIRED": "Needs review",
+    }
+    return mapping.get(decision, "Completed")
+
+
+# ---------------------------------------------------------------------------
+# Output schemas
+# ---------------------------------------------------------------------------
 
 class BoxOut(BaseModel):
     x: int
@@ -38,10 +66,40 @@ class BoxOut(BaseModel):
 
 class DefectOut(BaseModel):
     type: str
-    severity: str
+    severity: str         # Informational / Minor / Major / Critical
     confidence: float
     anomalyScore: float
     box: BoxOut
+
+
+class AnomalyResultOut(BaseModel):
+    id: str
+    model_name: str
+    anomaly_score: float
+    confidence_score: float
+    is_anomalous: bool
+    severity: str
+    defects: list[DefectOut]
+    heatmap_path: Optional[str] = None
+    processing_time_ms: Optional[float] = None
+
+
+class InspectionDetailOut(BaseModel):
+    id: str
+    date: str
+    industry: str
+    product: str
+    station: str
+    pipeline: str
+    pipeline_id: Optional[str]
+    status: str            # spec vocabulary
+    overall_decision: str  # PASS / FAIL / REVIEW_REQUIRED
+    quality_score: int
+    severity: str          # top-level severity label
+    image_path: str
+    requires_review: bool
+    review_note: Optional[str]
+    anomaly_results: list[AnomalyResultOut]
 
 
 class InspectionListItemOut(BaseModel):
@@ -49,20 +107,35 @@ class InspectionListItemOut(BaseModel):
     date: str
     industry: str
     product: str
+    station: str
     pipeline: str
     status: str
-    score: int
+    quality_score: int
     severity: str
-    defects: int
+    defect_count: int
+    requires_review: bool
 
 
 class InspectionRunOut(BaseModel):
     inspectionId: str
-    score: int
+    quality_score: int
     status: str
+    overall_decision: str
+    severity: str
     defects: list[DefectOut]
+    # Legacy compat
+    score: int
     isMock: bool = False
 
+
+class ReviewIn(BaseModel):
+    decision: str    # Approved / Rejected
+    note: str
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _ensure_manufacturer_and_pipeline(
     db: Session, industry: str, pipeline_name: str
@@ -80,20 +153,19 @@ def _ensure_manufacturer_and_pipeline(
         pipe = pipe_repo.create(
             manufacturer_id=mfg.id,
             name=pipeline_name,
-            modules_json=[{"id": "anomaly_detection", "model": "PatchCore-v2"}],
+            modules_json=[{"id": "anomaly_detection", "type": "opencv_heuristic"}],
         )
         pipeline_id = pipe.id
     return mfg.id, pipeline_id
 
 
 def _analyze_image_bytes(raw_bytes: bytes, threshold: float) -> tuple[float, list[DefectOut]]:
-    """Run lightweight OpenCV image anomaly heuristic on uploaded bytes."""
+    """OpenCV heuristic prototype signal — clearly labelled, not a real AI model."""
     arr = np.frombuffer(raw_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
     if img is None:
         return 0.25, []
 
-    # High-frequency local contrast deviation as an interpretable prototype signal
     blur = cv2.GaussianBlur(img, (15, 15), 0)
     diff = cv2.absdiff(img, blur)
     _, thresh_mask = cv2.threshold(diff, int(max(15, (1.0 - threshold) * 60)), 255, cv2.THRESH_BINARY)
@@ -117,60 +189,190 @@ def _analyze_image_bytes(raw_bytes: bytes, threshold: float) -> tuple[float, lis
         )
         area_ratio = area / total_area
         a_score = min(0.99, round(0.45 + area_ratio * 8.0, 2))
-        sev = "high" if a_score >= 0.8 else "medium" if a_score >= 0.6 else "low"
+        severity = _anomaly_to_severity(a_score)
         defects.append(
             DefectOut(
                 type="Surface Irregularity",
-                severity=sev,
+                severity=severity,
                 confidence=round(min(0.96, 0.65 + a_score * 0.3), 2),
                 anomalyScore=a_score,
                 box=box,
             )
         )
 
-    max_anomaly = max((d.anomalyScore for d in defects), default=round(float(diff.mean()) / 255.0, 2))
+    max_anomaly = max(
+        (d.anomalyScore for d in defects),
+        default=round(float(diff.mean()) / 255.0, 2),
+    )
     return max_anomaly, defects
 
 
+def _build_detail(db: Session, inspection_id: int) -> Optional[InspectionDetailOut]:
+    repo = InspectionRepository(db)
+    rec = repo.get_with_results(inspection_id)
+    if rec is None:
+        return None
+
+    mfg = ManufacturerRepository(db).get_by_id(rec.manufacturer_id)
+    pipe = (
+        PipelineConfigRepository(db).get_by_id(rec.pipeline_config_id)
+        if rec.pipeline_config_id
+        else None
+    )
+
+    top_sev = "Informational"
+    requires_review = False
+    review_note: Optional[str] = None
+    for sev in rec.severity_scores:
+        top_sev = sev.severity_level
+        requires_review = sev.requires_human_review
+        review_note = sev.rule_notes
+
+    anomaly_outs: list[AnomalyResultOut] = []
+    for ar in rec.anomaly_results:
+        boxes = ar.bounding_boxes_json or []
+        defects_out = []
+        for d in boxes:
+            defects_out.append(DefectOut(
+                type=d.get("type", "Surface Irregularity"),
+                severity=d.get("severity", "Informational"),
+                confidence=d.get("confidence", 0.0),
+                anomalyScore=d.get("anomalyScore", 0.0),
+                box=BoxOut(**d["box"]) if "box" in d else BoxOut(x=0, y=0, w=10, h=10),
+            ))
+        model_name = "OpenCV Heuristic"
+        if ar.model_config_id:
+            mc = ModelConfigRepository(db).get_by_id(ar.model_config_id)
+            if mc:
+                model_name = mc.name
+
+        anomaly_outs.append(AnomalyResultOut(
+            id=str(ar.id),
+            model_name=model_name,
+            anomaly_score=ar.anomaly_score,
+            confidence_score=ar.confidence_score or 0.0,
+            is_anomalous=ar.is_anomalous,
+            severity=_anomaly_to_severity(ar.anomaly_score),
+            defects=defects_out,
+            heatmap_path=ar.heatmap_file_path,
+            processing_time_ms=ar.processing_time_ms,
+        ))
+
+    decision = rec.overall_decision or "PASS"
+    return InspectionDetailOut(
+        id=f"INS-{rec.id}",
+        date=rec.inspected_at.isoformat(),
+        industry=mfg.industry if mfg else "Manufacturing",
+        product=rec.product_serial,
+        station=rec.station_name or "Web UI Station",
+        pipeline=pipe.name if pipe else "Default",
+        pipeline_id=str(rec.pipeline_config_id) if rec.pipeline_config_id else None,
+        status=_decision_to_status(decision),
+        overall_decision=decision,
+        quality_score=int(round((rec.quality_score or 0.9) * 100)),
+        severity=top_sev,
+        image_path=rec.image_file_path,
+        requires_review=requires_review,
+        review_note=review_note,
+        anomaly_results=anomaly_outs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @router.get("", response_model=list[InspectionListItemOut])
-def list_inspections(db: Session = Depends(get_db)) -> list[InspectionListItemOut]:
-    """List inspection records stored in SQLite."""
-    records = InspectionRepository(db).list_all(limit=100)
+def list_inspections(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+) -> list[InspectionListItemOut]:
+    """List inspection records. Server-side paginated, never creates records."""
+    records = InspectionRepository(db).list_all(limit=limit)
     items: list[InspectionListItemOut] = []
-    for rec in sorted(records, key=lambda r: r.inspected_at, reverse=True):
+    for rec in sorted(records, key=lambda r: r.inspected_at, reverse=True)[offset:offset + limit]:
+        mfg = ManufacturerRepository(db).get_by_id(rec.manufacturer_id)
+        pipe = (
+            PipelineConfigRepository(db).get_by_id(rec.pipeline_config_id)
+            if rec.pipeline_config_id
+            else None
+        )
         detailed = InspectionRepository(db).get_with_results(rec.id)
         if detailed is None:
             continue
-        mfg = ManufacturerRepository(db).get_by_id(detailed.manufacturer_id)
-        pipe = (
-            PipelineConfigRepository(db).get_by_id(detailed.pipeline_config_id)
-            if detailed.pipeline_config_id
-            else None
-        )
-        decision = (detailed.overall_decision or "PASS").lower()
-        status = "review" if "review" in decision else ("fail" if decision == "fail" else "pass")
-        severity = (
-            detailed.severity_scores[0].severity_level.lower()
-            if detailed.severity_scores
-            else "none"
-        )
-        defect_count = sum(
-            len(ar.bounding_boxes_json or []) for ar in detailed.anomaly_results
-        )
-        items.append(
-            InspectionListItemOut(
-                id=f"INS-{detailed.id}",
-                date=detailed.inspected_at.isoformat(),
-                industry=mfg.industry if mfg else "Manufacturing",
-                product=detailed.product_serial,
-                pipeline=pipe.name if pipe else "Default",
-                status=status,
-                score=int(round((detailed.quality_score or 0.9) * 100)),
-                severity=severity,
-                defects=defect_count,
-            )
-        )
+        decision = (detailed.overall_decision or "PASS")
+        item_status = _decision_to_status(decision)
+
+        if status and item_status.lower().replace(" ", "_") != status.lower().replace(" ", "_"):
+            continue
+
+        top_sev = "Informational"
+        requires_review = False
+        for sev in detailed.severity_scores:
+            top_sev = sev.severity_level
+            requires_review = sev.requires_human_review
+
+        defect_count = sum(len(ar.bounding_boxes_json or []) for ar in detailed.anomaly_results)
+        items.append(InspectionListItemOut(
+            id=f"INS-{detailed.id}",
+            date=detailed.inspected_at.isoformat(),
+            industry=mfg.industry if mfg else "Manufacturing",
+            product=detailed.product_serial,
+            station=detailed.station_name or "Web UI Station",
+            pipeline=pipe.name if pipe else "Default",
+            status=item_status,
+            quality_score=int(round((detailed.quality_score or 0.9) * 100)),
+            severity=top_sev,
+            defect_count=defect_count,
+            requires_review=requires_review,
+        ))
     return items
+
+
+@router.get("/review-queue", response_model=list[InspectionListItemOut])
+def review_queue(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+) -> list[InspectionListItemOut]:
+    """Return inspections that require human review, ordered by severity then age."""
+    sev_order = {"Critical": 0, "Major": 1, "Minor": 2, "Informational": 3}
+    sev_records = SeverityScoreRepository(db).list_requiring_review(limit=limit * 2)
+    seen: set[int] = set()
+    items: list[InspectionListItemOut] = []
+    for sev in sev_records:
+        if sev.inspection_id in seen:
+            continue
+        seen.add(sev.inspection_id)
+        detail = _build_detail(db, sev.inspection_id)
+        if detail is None:
+            continue
+        items.append(InspectionListItemOut(
+            id=detail.id,
+            date=detail.date,
+            industry=detail.industry,
+            product=detail.product,
+            station=detail.station,
+            pipeline=detail.pipeline,
+            status=detail.status,
+            quality_score=detail.quality_score,
+            severity=detail.severity,
+            defect_count=sum(len(ar.defects) for ar in detail.anomaly_results),
+            requires_review=detail.requires_review,
+        ))
+    items.sort(key=lambda i: (sev_order.get(i.severity, 99), i.date))
+    return items[:limit]
+
+
+@router.get("/{inspection_id}", response_model=InspectionDetailOut)
+def get_inspection(inspection_id: str, db: Session = Depends(get_db)) -> InspectionDetailOut:
+    """Get full inspection detail including anomaly results and evidence."""
+    numeric_id = int(inspection_id.replace("INS-", ""))
+    detail = _build_detail(db, numeric_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    return detail
 
 
 @router.post("", response_model=InspectionRunOut)
@@ -183,7 +385,7 @@ async def run_inspection(
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ) -> InspectionRunOut:
-    """Save uploaded image to local storage, run prototype inspection, and persist to SQLite."""
+    """Save uploaded image, run prototype OpenCV heuristic, persist result to SQLite."""
     settings = get_settings()
     upload_dir = settings.storage_root / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -200,13 +402,10 @@ async def run_inspection(
         anomaly_score, defects = 0.2, []
 
     if anomaly_score >= max(0.75, threshold + 0.2):
-        status = "fail"
         decision = "FAIL"
     elif anomaly_score >= threshold or defects:
-        status = "review"
         decision = "REVIEW_REQUIRED"
     else:
-        status = "pass"
         decision = "PASS"
 
     quality_score = max(0.05, min(0.99, round(1.0 - anomaly_score * 0.65, 2)))
@@ -236,28 +435,68 @@ async def run_inspection(
         bounding_boxes_json=[d.model_dump() for d in defects],
     )
 
-    top_sev = defects[0].severity if defects else ("low" if status == "review" else "none")
+    top_severity = defects[0].severity if defects else (
+        "Minor" if decision == "REVIEW_REQUIRED" else "Informational"
+    )
     SeverityScoreRepository(db).create(
         inspection_id=insp.id,
         anomaly_result_id=ar.id,
-        severity_level=top_sev,
+        severity_level=top_severity,
         numeric_score=anomaly_score,
-        requires_human_review=(status == "review"),
+        requires_human_review=(decision == "REVIEW_REQUIRED"),
     )
     db.commit()
 
+    status_label = _decision_to_status(decision)
     return InspectionRunOut(
         inspectionId=f"INS-{insp.id}",
-        score=int(round(quality_score * 100)),
-        status=status,
+        quality_score=int(round(quality_score * 100)),
+        status=status_label,
+        overall_decision=decision,
+        severity=top_severity,
         defects=defects,
+        score=int(round(quality_score * 100)),
         isMock=False,
     )
 
 
+@router.post("/{inspection_id}/review")
+def review_inspection(
+    inspection_id: str,
+    body: ReviewIn,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Submit a human review decision (Approved / Rejected) with a mandatory note."""
+    if body.decision not in ("Approved", "Rejected"):
+        raise HTTPException(status_code=422, detail="decision must be 'Approved' or 'Rejected'")
+    if not body.note.strip():
+        raise HTTPException(status_code=422, detail="A review note is required")
+
+    numeric_id = int(inspection_id.replace("INS-", ""))
+    repo = InspectionRepository(db)
+    insp = repo.get_with_results(numeric_id)
+    if insp is None:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+
+    new_decision = "PASS" if body.decision == "Approved" else "FAIL"
+    insp.overall_decision = new_decision
+    insp.status = "reviewed"
+
+    for sev in insp.severity_scores:
+        sev.requires_human_review = False
+        sev.rule_notes = f"[{body.decision}] {body.note}"
+
+    db.commit()
+    return {
+        "status": body.decision,
+        "inspectionId": inspection_id,
+        "note": body.note,
+    }
+
+
 @router.post("/{inspection_id}/confirm")
 def confirm_inspection(inspection_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
-    """Mark an inspection as human-reviewed."""
+    """Mark an inspection as human-reviewed (legacy compat endpoint)."""
     numeric_id = int(inspection_id.replace("INS-", ""))
     repo = InspectionRepository(db)
     insp = repo.get_with_results(numeric_id)
