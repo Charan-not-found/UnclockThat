@@ -13,6 +13,7 @@ import {
 
 import StatCard from '../../components/common/StatCard'
 import StatusBadge from '../../components/common/StatusBadge'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import Button from '../../components/common/Button'
 import { listInspections } from '../../services/inspectionService'
@@ -59,7 +60,18 @@ export default function Dashboard() {
     <div className="space-y-5">
       <div className="flex items-center justify-between page-header">
         <div>
-          <h1>Overview</h1>
+          <div className="flex items-center gap-2">
+            <h1>Overview</h1>
+            <PageHelpLegend
+              title="Overview"
+              summary="Live KPIs and charts computed from persisted inspection records over the last 30 days."
+              items={[
+                { label: 'Pass Rate', description: 'Percentage of inspections with PASS (Completed) decision.' },
+                { label: 'Anomaly Rate', description: 'Percentage of inspections flagged as Failed or Needs review.' },
+                { label: 'Severity', badge: 'Critical', description: 'Critical / Major / Minor / Informational severity levels.' },
+              ]}
+            />
+          </div>
           <p>Live metrics from {total} persisted inspection record{total !== 1 ? 's' : ''} · last 30 days</p>
         </div>
         <Button variant="ghost" size="sm" onClick={load}>

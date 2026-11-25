@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,8 +11,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from backend.app.core.config import BASE_DIR
 from backend.app.database.connection import get_db
+from backend.app.database.models.model_config import ModelConfig
 from backend.app.database.models.scanner import AnalysisModule, DatasetRecord, ScannerUnit
+from backend.app.database.repositories.model_repository import ManufacturerRepository
 from backend.app.models.catalogue import get_model_capability, get_model_catalogue
 
 router = APIRouter(tags=["scanner-units"])
@@ -303,11 +308,47 @@ def add_module(unit_id: int, body: ModuleIn, db: Session = Depends(get_db)) -> M
         model_key=body.model_key,
         dataset_id=body.dataset_id,
         selected_outputs_json=outputs,
-        config_json=body.config,
+        config_json=dict(body.config or {}),
         state=state,
     )
     db.add(mod)
     db.flush()
+
+    # Clone a dedicated ModelConfig for this module so training & weights stay isolated
+    mfg_repo = ManufacturerRepository(db)
+    mfg = mfg_repo.get_by_name(unit.industry) or mfg_repo.get_by_name("Default Manufacturer")
+    if mfg is None:
+        mfg = mfg_repo.create(name=unit.industry or "Default Manufacturer", industry=unit.industry or "General")
+
+    trained_dir = BASE_DIR / "artifacts" / "trained"
+    trained_dir.mkdir(parents=True, exist_ok=True)
+    ext = ".pt" if body.model_key == "yolo11n_seg" else ".ckpt"
+    cloned_rel = f"artifacts/trained/module_{mod.id}_{body.model_key}{ext}"
+    cloned_abs = BASE_DIR / cloned_rel
+
+    src_weights = cap.get("trained_checkpoint_path") or cap.get("pretrained_path")
+    if src_weights and (BASE_DIR / src_weights).is_file() and body.model_key == "yolo11n_seg":
+        shutil.copy2(BASE_DIR / src_weights, cloned_abs)
+
+    mc = ModelConfig(
+        manufacturer_id=mfg.id,
+        name=f"{unit.name} — {mod.name}",
+        model_family=cap["model_family"],
+        version="1.0.0",
+        dataset_dir_path=ds.extracted_path if ds else "",
+        weights_file_path=cloned_rel if body.model_key != "opencv_heuristic" else "",
+        hyperparameters_json={"task": cap["task"], "model_key": body.model_key, "module_id": mod.id},
+        metrics_json={},
+        is_active=(state == "Ready"),
+    )
+    db.add(mc)
+    db.flush()
+
+    cfg = dict(mod.config_json or {})
+    cfg["cloned_model_config_id"] = mc.id
+    cfg["cloned_weights_path"] = cloned_rel if body.model_key != "opencv_heuristic" else None
+    mod.config_json = cfg
+
     db.refresh(unit)
     unit.status = _compute_unit_status(unit.modules)
     db.commit()
@@ -352,6 +393,16 @@ def delete_module(unit_id: int, module_id: int, db: Session = Depends(get_db)) -
     mod = db.get(AnalysisModule, module_id)
     if mod is None or mod.scanner_unit_id != unit_id:
         raise HTTPException(status_code=404, detail="Analysis Module not found")
+
+    cfg = mod.config_json or {}
+    mc_id = cfg.get("cloned_model_config_id")
+    if mc_id:
+        mc = db.get(ModelConfig, mc_id)
+        if mc:
+            db.delete(mc)
+    cloned_w = cfg.get("cloned_weights_path")
+    if cloned_w:
+        (BASE_DIR / cloned_w).unlink(missing_ok=True)
 
     db.delete(mod)
     db.flush()

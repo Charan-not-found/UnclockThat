@@ -7,6 +7,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Dumbbell, Play, RefreshCw, AlertTriangle, Activity } from 'lucide-react'
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import { listTrainingJobs, startTrainingJob } from '../../services/trainingService'
 import { listDatasets } from '../../services/datasetService'
@@ -103,7 +104,19 @@ export default function Training() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3 page-header">
         <div>
-          <h1>Training Center</h1>
+          <div className="flex items-center gap-2">
+            <h1>Training Center</h1>
+            <PageHelpLegend
+              title="Training Center"
+              summary="Runs isolated EfficientAD training on GPU (CUDA) or CPU using your validated dataset."
+              items={[
+                { label: 'Queued', badge: 'Queued', description: 'Job is waiting to start (max 1 concurrent job).' },
+                { label: 'Running', badge: 'Running', description: 'Training in progress; watch the Real-time Progress tab.' },
+                { label: 'Completed', badge: 'Completed', description: 'Checkpoint saved and linked module marked Ready.' },
+                { label: 'Failed', badge: 'Failed', description: 'Training stopped with an error; inspect the log.' },
+              ]}
+            />
+          </div>
           <p>Launch EfficientAD-Small training runs, inspect dataset readiness, and monitor live progress.</p>
         </div>
         <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>

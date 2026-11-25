@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { RefreshCw, Info } from 'lucide-react'
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import { listModels, toggleModel } from '../../services/modelService'
 import type { ModelInfo } from '../../types'
@@ -50,7 +51,19 @@ export default function Models() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3 page-header">
         <div>
-          <h1>AI Models</h1>
+          <div className="flex items-center gap-2">
+            <h1>AI Models</h1>
+            <PageHelpLegend
+              title="AI Models"
+              summary="Lists cloned per-module models and seeded base models with live on-disk weight verification."
+              items={[
+                { label: 'Ready', badge: 'Ready', description: 'Model is active and available for inspection.' },
+                { label: 'Disabled', badge: 'Disabled', description: 'Model is inactive until trained or manually enabled.' },
+                { label: '✓ Present', description: 'Weight/checkpoint file exists on disk.' },
+                { label: '✗ Missing', description: 'Weights file not found; run scripts/install_models.py or train the module.' },
+              ]}
+            />
+          </div>
           <p>{models?.length ?? 0} model configuration{models?.length !== 1 ? 's' : ''} registered.</p>
         </div>
         <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>

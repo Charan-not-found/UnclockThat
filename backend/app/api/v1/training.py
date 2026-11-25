@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import BASE_DIR, get_settings
 from backend.app.database.connection import SessionLocal, get_db
+from backend.app.database.models.model_config import ModelConfig
 from backend.app.database.models.scanner import AnalysisModule, DatasetRecord, ScannerUnit, TrainingRun
 from backend.app.models.catalogue import get_model_capability
 
@@ -207,10 +208,17 @@ def _run_efficientad_job(job_id: int) -> None:
         except Exception as test_exc:
             metrics["evaluation_note"] = f"Normal-only dataset ({test_exc})"
 
-        _update_progress(db, job_id, 95, "Saving trained checkpoint", "Exporting checkpoint to artifacts/trained/...")
+        _update_progress(db, job_id, 95, "Saving trained checkpoint", "Exporting module checkpoint...")
         trained_dir = BASE_DIR / "artifacts" / "trained"
         trained_dir.mkdir(parents=True, exist_ok=True)
-        out_ckpt = trained_dir / "efficientad_casting.ckpt"
+        if run.module_id:
+            mod_obj = db.get(AnalysisModule, run.module_id)
+            cloned_rel = (mod_obj.config_json or {}).get("cloned_weights_path") if mod_obj else None
+            out_ckpt = (BASE_DIR / cloned_rel) if cloned_rel else (trained_dir / f"module_{run.module_id}_{run.model_key}.ckpt")
+        else:
+            out_ckpt = trained_dir / f"run_{job_id}_{run.model_key}.ckpt"
+
+        out_ckpt.parent.mkdir(parents=True, exist_ok=True)
         best_ckpt = getattr(engine.trainer.checkpoint_callback, "best_model_path", "")
         if best_ckpt and Path(best_ckpt).is_file():
             shutil.copy2(best_ckpt, out_ckpt)
@@ -234,6 +242,14 @@ def _run_efficientad_job(job_id: int) -> None:
             mod = db.get(AnalysisModule, run.module_id)
             if mod:
                 mod.state = "Ready"
+                mod.dataset_id = run.dataset_id
+                mc_id = (mod.config_json or {}).get("cloned_model_config_id")
+                if mc_id:
+                    mc = db.get(ModelConfig, mc_id)
+                    if mc:
+                        mc.is_active = True
+                        mc.metrics_json = metrics
+                        mc.weights_file_path = str(out_ckpt.relative_to(BASE_DIR))
                 if mod.scanner_unit_id:
                     unit = db.get(ScannerUnit, mod.scanner_unit_id)
                     if unit:
@@ -291,13 +307,22 @@ def start_training_job(body: TrainingJobIn, db: Session = Depends(get_db)) -> Tr
             detail="Training runner currently supports 'efficientad_small' and 'efficientad_medium'.",
         )
 
+    # If training a specific Analysis Module, default to that module's dataset_id
+    effective_dataset_id = body.dataset_id
+    if body.module_id is not None:
+        mod = db.get(AnalysisModule, body.module_id)
+        if mod is None:
+            raise HTTPException(status_code=404, detail="Analysis Module not found")
+        if effective_dataset_id is None:
+            effective_dataset_id = mod.dataset_id
+
     # Strict dataset check: reject missing, unvalidated, or empty ZIP/datasets
-    if body.dataset_id is None:
+    if effective_dataset_id is None:
         raise HTTPException(
             status_code=422,
             detail="Training issue: No dataset uploaded or selected. Please upload a non-empty .zip or image dataset first.",
         )
-    ds = db.get(DatasetRecord, body.dataset_id)
+    ds = db.get(DatasetRecord, effective_dataset_id)
     if ds is None:
         raise HTTPException(
             status_code=404,
@@ -320,7 +345,7 @@ def start_training_job(body: TrainingJobIn, db: Session = Depends(get_db)) -> Tr
         run = TrainingRun(
             scanner_unit_id=body.scanner_unit_id,
             module_id=body.module_id,
-            dataset_id=body.dataset_id,
+            dataset_id=effective_dataset_id,
             model_key=body.model_key,
             strategy=body.strategy,
             status="Queued",

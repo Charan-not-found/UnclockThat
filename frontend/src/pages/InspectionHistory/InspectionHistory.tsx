@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom'
 import { RefreshCw, Search } from 'lucide-react'
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import { listInspections } from '../../services/inspectionService'
 import type { InspectionListItem } from '../../types'
@@ -39,7 +40,18 @@ export default function InspectionHistory() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3 page-header">
         <div className="flex-1">
-          <h1>Inspection History</h1>
+          <div className="flex items-center gap-2">
+            <h1>Inspection History</h1>
+            <PageHelpLegend
+              title="Inspection History"
+              summary="All persisted sample tests and inspections stored in clockit.db."
+              items={[
+                { label: 'Completed', badge: 'Completed', description: 'Passed inspection.' },
+                { label: 'Needs review', badge: 'Needs review', description: 'Flagged for operator review.' },
+                { label: 'Failed', badge: 'Failed', description: 'Failed quality threshold.' },
+              ]}
+            />
+          </div>
           <p>{rows?.length ?? 0} record{rows?.length !== 1 ? 's' : ''} from the database.</p>
         </div>
         <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>

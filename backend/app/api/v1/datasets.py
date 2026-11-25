@@ -358,7 +358,10 @@ def delete_dataset(dataset_id: int, db: Session = Depends(get_db)) -> dict[str, 
         shutil.rmtree(extracted, ignore_errors=True)
     archive = Path(ds.archive_path)
     if archive.is_file():
-        archive.unlink(missing_ok=True)
+        try:
+            archive.unlink(missing_ok=True)
+        except OSError:
+            pass
     db.delete(ds)
     db.commit()
     return {"status": "deleted", "id": str(dataset_id)}

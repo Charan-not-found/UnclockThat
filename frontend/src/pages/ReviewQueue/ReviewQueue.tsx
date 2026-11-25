@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import { getReviewQueue, listCorrections } from '../../services/inspectionService'
 import type { CorrectionRecord, InspectionListItem } from '../../types'
@@ -33,7 +34,17 @@ export default function ReviewQueue() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3 page-header">
         <div>
-          <h1>Review Queue</h1>
+          <div className="flex items-center gap-2">
+            <h1>Review Queue</h1>
+            <PageHelpLegend
+              title="Review Queue"
+              summary="Inspections requiring human review, ordered by severity (Critical first) then age."
+              items={[
+                { label: 'Needs review', badge: 'Needs review', description: 'Awaiting operator decision (Approved or Rejected).' },
+                { label: 'False positive', description: 'Normal sample flagged as anomalous — copied to data/false_positives/.' },
+              ]}
+            />
+          </div>
           <p>{rows?.length ?? 0} inspection{rows?.length !== 1 ? 's' : ''} awaiting human review · ordered by severity then age</p>
         </div>
         <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>

@@ -132,6 +132,10 @@ def test_database_tables_and_repository_crud():
         assert insp_detail is not None
         assert insp_detail.product_serial == "PART-TEST-001"
 
+        # Clean up test records so Test Model never leaks into AI Models UI
+        mfg_repo.delete(mfg)
+        db.commit()
+
     finally:
         db.close()
 

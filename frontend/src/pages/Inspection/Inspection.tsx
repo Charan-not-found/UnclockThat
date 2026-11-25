@@ -9,6 +9,7 @@ import { Upload, Play, CheckCircle2, AlertCircle } from 'lucide-react'
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
 import Modal from '../../components/common/Modal'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { ErrorState } from '../../components/common/LoadingState'
 import { runInspection, reviewInspection } from '../../services/inspectionService'
 import { listScannerUnits } from '../../services/scannerUnitService'
@@ -105,7 +106,19 @@ export default function Inspection() {
   return (
     <div className="space-y-5">
       <div className="page-header">
-        <h1>Test Sample</h1>
+        <div className="flex items-center gap-2">
+          <h1>Test Sample</h1>
+          <PageHelpLegend
+            title="Test Sample"
+            summary="Upload a single sample image and test it against a Scanner Unit or the active model."
+            items={[
+              { label: 'Completed', badge: 'Completed', description: 'Sample passed below the anomaly threshold.' },
+              { label: 'Needs review', badge: 'Needs review', description: 'Borderline anomaly score; routed to Review Queue.' },
+              { label: 'Failed', badge: 'Failed', description: 'High anomaly score or defect detected above fail threshold.' },
+              { label: 'Severity', badge: 'Critical', description: 'Informational / Minor / Major / Critical based on anomaly score.' },
+            ]}
+          />
+        </div>
         <p>Upload a sample image and test it against a Scanner Unit or the active trained model.</p>
       </div>
 

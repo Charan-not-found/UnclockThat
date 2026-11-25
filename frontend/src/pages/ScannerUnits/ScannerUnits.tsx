@@ -10,6 +10,7 @@ import {
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
 import Modal from '../../components/common/Modal'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import {
   listScannerUnits,
@@ -310,7 +311,20 @@ export default function ScannerUnits() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3 page-header">
         <div>
-          <h1>Scanner Units</h1>
+          <div className="flex items-center gap-2">
+            <h1>Scanner Units</h1>
+            <PageHelpLegend
+              title="Scanner Units"
+              summary="Scanner Units group Analysis Modules into reusable inspection workflows. Adding a module clones a dedicated model config for isolated training."
+              items={[
+                { label: 'Draft', badge: 'Draft', description: 'Scanner Unit has no ready modules yet.' },
+                { label: 'Needs dataset', badge: 'Needs dataset', description: 'Selected model requires a validated dataset before training.' },
+                { label: 'Training', badge: 'Training', description: 'Model is currently training on the module dataset.' },
+                { label: 'Ready', badge: 'Ready', description: 'Configured and ready to run in Test Sample.' },
+                { label: 'Failed', badge: 'Failed', description: 'Last training run failed; check Training Center.' },
+              ]}
+            />
+          </div>
           <p>Create and configure reusable inspection Scanner Units and their Analysis Modules.</p>
         </div>
         <div className="flex gap-2">

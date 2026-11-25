@@ -20,6 +20,7 @@ from backend.app.core.config import BASE_DIR, get_settings
 from backend.app.database.connection import get_db
 from backend.app.database.models.scanner import CorrectionRecord, ScannerUnit
 from backend.app.models.efficientad_adapter import EfficientAdAdapter
+from backend.app.models.yolo_adapter import YoloSegAdapter
 from backend.app.database.repositories.inspection_repository import (
     AnomalyResultRepository,
     InspectionRepository,
@@ -443,8 +444,9 @@ async def run_inspection(
     confidence_score: float = 0.89
     used_model_name: str = "OpenCV Heuristic"
 
-    # Determine model preference from Scanner Unit if provided
+    # Determine model preference & cloned checkpoint from Scanner Unit if provided
     preferred_model_key: Optional[str] = None
+    cloned_ckpt_path: Optional[Path] = None
     if scannerUnitId is not None:
         unit = db.scalar(
             select(ScannerUnit)
@@ -459,16 +461,28 @@ async def run_inspection(
         ready_mods = [m for m in unit.modules if m.state == "Ready"]
         if ready_mods:
             preferred_model_key = ready_mods[0].model_key
+            cw = (ready_mods[0].config_json or {}).get("cloned_weights_path")
+            if cw and (BASE_DIR / cw).is_file():
+                cloned_ckpt_path = BASE_DIR / cw
 
     if file is not None:
         raw_bytes = await file.read()
         stored_path.write_bytes(raw_bytes)
-        use_efficientad = (
-            preferred_model_key == "efficientad_small"
+        if preferred_model_key == "yolo11n_seg" and YoloSegAdapter.is_available(cloned_ckpt_path):
+            pred = YoloSegAdapter.predict_bytes(raw_bytes, threshold=threshold, weights_path=cloned_ckpt_path)
+            anomaly_score = pred["anomaly_score"]
+            confidence_score = pred["confidence_score"]
+            defects = [DefectOut(**d) for d in pred["defects"]]
+            heatmap_path = pred["heatmap_path"]
+            processing_time_ms = pred["processing_time_ms"]
+            used_model_name = pred["model_name"]
+            if heatmap_path:
+                heatmap_url = f"/results/{Path(heatmap_path).name}"
+        elif (
+            preferred_model_key in ("efficientad_small", "efficientad_medium")
             or (preferred_model_key is None and EfficientAdAdapter.is_available())
-        )
-        if use_efficientad and EfficientAdAdapter.is_available():
-            pred = EfficientAdAdapter.predict_bytes(raw_bytes, threshold=threshold)
+        ) and EfficientAdAdapter.is_available(cloned_ckpt_path):
+            pred = EfficientAdAdapter.predict_bytes(raw_bytes, threshold=threshold, ckpt_path=cloned_ckpt_path)
             anomaly_score = pred["anomaly_score"]
             confidence_score = pred["confidence_score"]
             defects = [DefectOut(**d) for d in pred["defects"]]

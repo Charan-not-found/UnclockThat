@@ -7,6 +7,7 @@ import { Upload, RefreshCw, Trash2, CheckCircle2, AlertCircle } from 'lucide-rea
 import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
 import Modal from '../../components/common/Modal'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import { listDatasets, uploadDataset, validateDataset, deleteDataset } from '../../services/datasetService'
 import { classifyError } from '../../services/api'
@@ -25,6 +26,8 @@ export default function Datasets() {
   const [uploadErr, setUploadErr] = useState('')
   const [validatingId, setValidatingId] = useState<number>()
   const [deleteTarget, setDeleteTarget] = useState<DatasetRecord | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteErr, setDeleteErr] = useState('')
 
   const load = async () => {
     setErr(undefined)
@@ -73,9 +76,17 @@ export default function Datasets() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return
-    await deleteDataset(deleteTarget.id)
-    setDeleteTarget(null)
-    await load()
+    setDeleting(true)
+    setDeleteErr('')
+    try {
+      await deleteDataset(deleteTarget.id)
+      setDeleteTarget(null)
+      await load()
+    } catch (e) {
+      setDeleteErr(classifyError(e).detail || classifyError(e).message)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   if (!rows && !err) return <LoadingState message="Loading datasets…" />
@@ -85,7 +96,18 @@ export default function Datasets() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3 page-header">
         <div>
-          <h1>Datasets</h1>
+          <div className="flex items-center gap-2">
+            <h1>Datasets</h1>
+            <PageHelpLegend
+              title="Datasets"
+              summary="Datasets are stored in data/datasets/ and standardized to 480p (640×480) in data/training/."
+              items={[
+                { label: 'Validated', badge: 'Validated', description: 'Flat image-only archive or images verified and standardized to 480p.' },
+                { label: 'Validation failed', badge: 'Validation failed', description: 'Dataset is empty, has subfolders, or contains non-image/corrupt files.' },
+                { label: 'Duplicates', description: 'Exact SHA-256 content duplicates detected inside the upload.' },
+              ]}
+            />
+          </div>
           <p>Upload, extract, and validate image datasets (.zip or image files) stored in <code>data/datasets/</code> and <code>data/training/</code>.</p>
         </div>
         <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>
@@ -168,13 +190,15 @@ export default function Datasets() {
                     <td className="tabular-nums">{ds.invalid_file_count}</td>
                     <td className="tabular-nums">{ds.duplicate_count}</td>
                     <td className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>{new Date(ds.created_at).toLocaleDateString()}</td>
-                    <td className="flex gap-1">
-                      <Button size="sm" variant="ghost" loading={validatingId === ds.id} onClick={() => handleRevalidate(ds.id)}>
-                        <CheckCircle2 size={13} /> Validate
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(ds)} aria-label={`Delete ${ds.name}`}>
-                        <Trash2 size={13} className="text-red-500" />
-                      </Button>
+                    <td>
+                      <div className="flex items-center gap-1">
+                        <Button type="button" size="sm" variant="ghost" loading={validatingId === ds.id} onClick={() => handleRevalidate(ds.id)}>
+                          <CheckCircle2 size={13} /> Validate
+                        </Button>
+                        <Button type="button" size="sm" variant="ghost" onClick={() => { setDeleteErr(''); setDeleteTarget(ds) }} aria-label={`Delete ${ds.name}`}>
+                          <Trash2 size={13} className="text-red-500" />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -189,10 +213,14 @@ export default function Datasets() {
         title="Delete Dataset?"
         confirmLabel="Delete"
         dangerous
-        onCancel={() => setDeleteTarget(null)}
+        confirmLoading={deleting}
+        onCancel={() => { setDeleteErr(''); setDeleteTarget(null) }}
         onConfirm={handleDelete}
       >
-        Delete dataset <strong>{deleteTarget?.name}</strong> and its extracted training files?
+        <div className="space-y-2">
+          <p>Delete dataset <strong>{deleteTarget?.name}</strong> and its extracted training files?</p>
+          {deleteErr && <p className="text-xs text-red-500">{deleteErr}</p>}
+        </div>
       </Modal>
     </div>
   )

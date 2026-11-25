@@ -10,6 +10,7 @@ import {
 } from 'recharts'
 import Button from '../../components/common/Button'
 import StatCard from '../../components/common/StatCard'
+import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import {
   getSummary, getTrend, getSeverityDistribution, getStatusDistribution,
@@ -58,7 +59,17 @@ export default function Analytics() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3 page-header">
         <div>
-          <h1>Analytics</h1>
+          <div className="flex items-center gap-2">
+            <h1>Analytics</h1>
+            <PageHelpLegend
+              title="Analytics"
+              summary="Server-side aggregated quality trends and defect distributions."
+              items={[
+                { label: 'Pass Rate', description: 'PASS decisions divided by total inspections in the selected date range.' },
+                { label: 'Anomaly Rate', description: '(FAIL + Needs review) divided by total inspections in range.' },
+              ]}
+            />
+          </div>
           <p>All metrics computed server-side from persisted inspection records.</p>
         </div>
         <div className="flex items-center gap-2">
