@@ -124,21 +124,47 @@ def _run_efficientad_job(job_id: int) -> None:
             get_pretrained_weights_dir,
         )
 
-        model_size = "medium" if run.model_key == "efficientad_medium" else "small"
-        teacher_filename = f"pretrained_teacher_{model_size}.pth"
         use_cuda = torch.cuda.is_available()
         device_label = f"GPU ({torch.cuda.get_device_name(0)})" if use_cuda else "CPU"
-        _update_progress(db, job_id, 12, f"Preparing {teacher_filename} on {device_label}", f"Using {device_label}. Checking local {teacher_filename}...")
-        local_weights = BASE_DIR / "artifacts" / "pretrained" / teacher_filename
-        if not local_weights.is_file():
-            raise FileNotFoundError(f"Missing pretrained weights at {local_weights}")
-        target_dir = get_pretrained_weights_dir() / "efficientad_pretrained_weights"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_file = target_dir / teacher_filename
-        if not target_file.is_file():
-            shutil.copy2(local_weights, target_file)
+        ckpt_dir = BASE_DIR / "artifacts" / "checkpoints" / f"run_{job_id}"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve training dataset (strictly validated)
+        if run.model_key == "patchcore":
+            from anomalib.models import Patchcore
+            _update_progress(db, job_id, 15, f"Initializing PatchCore (WideResNet-50) on {device_label}", f"Using {device_label} with PatchCore coreset memory bank.")
+            model = Patchcore(backbone="wide_resnet50_2", coreset_sampling_ratio=0.1)
+            effective_epochs = 1
+        elif run.model_key == "dinomaly":
+            from anomalib.models import Dinomaly
+            _update_progress(db, job_id, 15, f"Initializing Dinomaly (DINOv2 ViT) on {device_label}", f"Using {device_label} with Dinomaly ViT-B/14.")
+            model = Dinomaly()
+            effective_epochs = run.max_epochs
+        else:
+            model_size = "medium" if run.model_key == "efficientad_medium" else "small"
+            teacher_filename = f"pretrained_teacher_{model_size}.pth"
+            _update_progress(db, job_id, 12, f"Preparing {teacher_filename} on {device_label}", f"Using {device_label}. Checking local {teacher_filename}...")
+            local_weights = BASE_DIR / "artifacts" / "pretrained" / teacher_filename
+            if not local_weights.is_file():
+                raise FileNotFoundError(f"Missing pretrained weights at {local_weights}")
+            target_dir = get_pretrained_weights_dir() / "efficientad_pretrained_weights"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_file = target_dir / teacher_filename
+            if not target_file.is_file():
+                shutil.copy2(local_weights, target_file)
+            aux_dir = tmp_dir / "aux_imagenette"
+            aux_class = aux_dir / "aux_class"
+            if not aux_class.is_dir() or not any(aux_class.iterdir()):
+                aux_class.mkdir(parents=True, exist_ok=True)
+                ds_tmp = db.get(DatasetRecord, run.dataset_id) if run.dataset_id else None
+                if ds_tmp and Path(ds_tmp.extracted_path).is_dir():
+                    for i, p in enumerate(sorted(Path(ds_tmp.extracted_path).rglob("*.*"))):
+                        if i >= 40:
+                            break
+                        if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}:
+                            shutil.copy2(p, aux_class / p.name)
+            model = EfficientAd(model_size=model_size, imagenet_dir=str(aux_dir))
+            effective_epochs = run.max_epochs
+
         ds = db.get(DatasetRecord, run.dataset_id) if run.dataset_id else None
         if ds is None or not Path(ds.extracted_path).is_dir() or ds.valid_image_count <= 0:
             raise ValueError("Training issue: Uploaded dataset is missing, empty, or has no valid images.")
@@ -178,13 +204,9 @@ def _run_efficientad_job(job_id: int) -> None:
                 pct = 25 + int((ep / max(1, run.max_epochs)) * 55)
                 _update_progress(db, job_id, pct, f"Completed epoch {ep}/{run.max_epochs}", f"Epoch {ep}/{run.max_epochs} finished.")
 
-        model = EfficientAd(model_size=model_size, imagenet_dir=str(aux_dir))
-        ckpt_dir = BASE_DIR / "artifacts" / "checkpoints" / f"run_{job_id}"
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-
         engine = Engine(
             default_root_dir=str(ckpt_dir),
-            max_epochs=run.max_epochs,
+            max_epochs=effective_epochs,
             limit_train_batches=run.limit_train_batches,
             limit_val_batches=15,
             limit_test_batches=15,
@@ -301,10 +323,10 @@ def start_training_job(body: TrainingJobIn, db: Session = Depends(get_db)) -> Tr
             status_code=422,
             detail=f"Model '{cap['display_name']}' does not support training strategy '{body.strategy}'.",
         )
-    if body.model_key not in ("efficientad_small", "efficientad_medium"):
+    if body.model_key not in ("efficientad_small", "efficientad_medium", "patchcore", "dinomaly"):
         raise HTTPException(
             status_code=422,
-            detail="Training runner currently supports 'efficientad_small' and 'efficientad_medium'.",
+            detail="Training runner supports 'patchcore', 'dinomaly', 'efficientad_small', and 'efficientad_medium'.",
         )
 
     # If training a specific Analysis Module, default to that module's dataset_id

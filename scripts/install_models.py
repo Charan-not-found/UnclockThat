@@ -1,8 +1,7 @@
-"""Download and verify all missing pretrained AI model weights for CLOCKIT."""
+"""Download and verify all pretrained AI model weights for CLOCKIT."""
 
 from __future__ import annotations
 
-import os
 import shutil
 import urllib.request
 import zipfile
@@ -12,8 +11,23 @@ ROOT = Path(__file__).resolve().parents[1]
 PRETRAINED_DIR = ROOT / "artifacts" / "pretrained"
 
 
+def _download_yolo(filename: str, fallback_url: str) -> bool:
+    dst = PRETRAINED_DIR / filename
+    if not dst.is_file():
+        print(f"Downloading {filename}...")
+        try:
+            from ultralytics import YOLO
+            YOLO(filename)
+            local_pt = Path(filename)
+            if local_pt.is_file():
+                shutil.move(str(local_pt), str(dst))
+        except Exception:
+            urllib.request.urlretrieve(fallback_url, dst)
+    return dst.is_file()
+
+
 def install_all_models() -> dict[str, bool]:
-    """Ensure all required pretrained weights exist in artifacts/pretrained/."""
+    """Ensure all pretrained weights exist in artifacts/pretrained/ and backbone caches."""
     PRETRAINED_DIR.mkdir(parents=True, exist_ok=True)
     status: dict[str, bool] = {}
 
@@ -42,28 +56,42 @@ def install_all_models() -> dict[str, bool]:
     status["pretrained_teacher_small.pth"] = small_dst.is_file()
     status["pretrained_teacher_medium.pth"] = medium_dst.is_file()
 
-    # 2. YOLO11n-Seg weights
-    yolo_seg_dst = PRETRAINED_DIR / "yolo11n-seg.pt"
-    if not yolo_seg_dst.is_file():
-        print("Downloading YOLO11n-Seg weights...")
-        try:
-            from ultralytics import YOLO
-            YOLO("yolo11n-seg.pt")
-            local_pt = Path("yolo11n-seg.pt")
-            if local_pt.is_file():
-                shutil.move(str(local_pt), str(yolo_seg_dst))
-        except Exception:
-            urllib.request.urlretrieve(
-                "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n-seg.pt",
-                yolo_seg_dst,
-            )
+    # 2. YOLO11n-Seg & YOLO11m-Seg (stronger medium detection/segmentation model)
+    status["yolo11n-seg.pt"] = _download_yolo(
+        "yolo11n-seg.pt",
+        "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n-seg.pt",
+    )
+    status["yolo11m-seg.pt"] = _download_yolo(
+        "yolo11m-seg.pt",
+        "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11m-seg.pt",
+    )
 
-    status["yolo11n-seg.pt"] = yolo_seg_dst.is_file()
+    # 3. Pre-cache PatchCore (wide_resnet50_2) and Dinomaly (DINOv2 ViT-B/14) backbones
+    try:
+        import timm
+        print("Caching PatchCore backbone (wide_resnet50_2)...")
+        timm.create_model("wide_resnet50_2", pretrained=True)
+        status["patchcore_wide_resnet50_2 (timm cache)"] = True
+    except Exception as exc:
+        print(f"Warning caching wide_resnet50_2: {exc}")
+        status["patchcore_wide_resnet50_2 (timm cache)"] = False
+
+    try:
+        from anomalib.models import Dinomaly
+        print("Caching Dinomaly ViT-B/14 DINOv2 backbone...")
+        Dinomaly()
+        status["dinomaly_vit_base_dinov2 (cache)"] = True
+    except Exception as exc:
+        print(f"Warning caching Dinomaly: {exc}")
+        status["dinomaly_vit_base_dinov2 (cache)"] = False
 
     print("\n=== CLOCKIT Pretrained Model Status ===")
     for name, ok in status.items():
-        size = (PRETRAINED_DIR / name).stat().st_size if ok else 0
-        print(f"  {'[OK]' if ok else '[MISSING]'} {name} ({size:,} bytes)")
+        path = PRETRAINED_DIR / name
+        if path.is_file():
+            print(f"  [OK] {name} ({path.stat().st_size:,} bytes)")
+        else:
+            print(f"  [{'OK' if ok else 'MISSING'}] {name}")
     return status
 
 

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 from backend.app.core.config import BASE_DIR, get_settings
 from backend.app.database.connection import get_db
 from backend.app.database.models.scanner import CorrectionRecord, ScannerUnit
+from backend.app.models.anomalib_adapter import AnomalibCheckpointAdapter
 from backend.app.models.efficientad_adapter import EfficientAdAdapter
 from backend.app.models.yolo_adapter import YoloSegAdapter
 from backend.app.database.repositories.inspection_repository import (
@@ -468,21 +469,30 @@ async def run_inspection(
     if file is not None:
         raw_bytes = await file.read()
         stored_path.write_bytes(raw_bytes)
-        if preferred_model_key == "yolo11n_seg" and YoloSegAdapter.is_available(cloned_ckpt_path):
-            pred = YoloSegAdapter.predict_bytes(raw_bytes, threshold=threshold, weights_path=cloned_ckpt_path)
-            anomaly_score = pred["anomaly_score"]
-            confidence_score = pred["confidence_score"]
-            defects = [DefectOut(**d) for d in pred["defects"]]
-            heatmap_path = pred["heatmap_path"]
-            processing_time_ms = pred["processing_time_ms"]
-            used_model_name = pred["model_name"]
-            if heatmap_path:
-                heatmap_url = f"/results/{Path(heatmap_path).name}"
+        if preferred_model_key in ("yolo11n_seg", "yolo11m_seg"):
+            default_yolo = BASE_DIR / "artifacts" / "pretrained" / (
+                "yolo11m-seg.pt" if preferred_model_key == "yolo11m_seg" else "yolo11n-seg.pt"
+            )
+            w_path = cloned_ckpt_path or default_yolo
+            if YoloSegAdapter.is_available(w_path):
+                pred = YoloSegAdapter.predict_bytes(raw_bytes, threshold=threshold, weights_path=w_path)
+            else:
+                anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
+                pred = None
+        elif preferred_model_key in ("patchcore", "dinomaly") and cloned_ckpt_path is not None:
+            pred = AnomalibCheckpointAdapter.predict_bytes(
+                raw_bytes, model_key=preferred_model_key, ckpt_path=cloned_ckpt_path, threshold=threshold
+            )
         elif (
             preferred_model_key in ("efficientad_small", "efficientad_medium")
             or (preferred_model_key is None and EfficientAdAdapter.is_available())
         ) and EfficientAdAdapter.is_available(cloned_ckpt_path):
             pred = EfficientAdAdapter.predict_bytes(raw_bytes, threshold=threshold, ckpt_path=cloned_ckpt_path)
+        else:
+            anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
+            pred = None
+
+        if pred is not None:
             anomaly_score = pred["anomaly_score"]
             confidence_score = pred["confidence_score"]
             defects = [DefectOut(**d) for d in pred["defects"]]
@@ -491,8 +501,6 @@ async def run_inspection(
             used_model_name = pred["model_name"]
             if heatmap_path:
                 heatmap_url = f"/results/{Path(heatmap_path).name}"
-        else:
-            anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
     else:
         anomaly_score, defects = 0.2, []
 

@@ -322,12 +322,12 @@ def add_module(unit_id: int, body: ModuleIn, db: Session = Depends(get_db)) -> M
 
     trained_dir = BASE_DIR / "artifacts" / "trained"
     trained_dir.mkdir(parents=True, exist_ok=True)
-    ext = ".pt" if body.model_key == "yolo11n_seg" else ".ckpt"
+    ext = ".pt" if body.model_key in ("yolo11n_seg", "yolo11m_seg") else ".ckpt"
     cloned_rel = f"artifacts/trained/module_{mod.id}_{body.model_key}{ext}"
     cloned_abs = BASE_DIR / cloned_rel
 
     src_weights = cap.get("trained_checkpoint_path") or cap.get("pretrained_path")
-    if src_weights and (BASE_DIR / src_weights).is_file() and body.model_key == "yolo11n_seg":
+    if src_weights and (BASE_DIR / src_weights).is_file() and body.model_key in ("yolo11n_seg", "yolo11m_seg"):
         shutil.copy2(BASE_DIR / src_weights, cloned_abs)
 
     mc = ModelConfig(

@@ -26,6 +26,7 @@ export default function Training() {
   const [err, setErr] = useState<string>()
 
   const [datasetId, setDatasetId] = useState<string>('')
+  const [modelKey, setModelKey] = useState<string>(searchParams.get('modelKey') ?? 'patchcore')
   const [unitId, setUnitId] = useState<string>(searchParams.get('unitId') ?? '')
   const [moduleId, setModuleId] = useState<string>(searchParams.get('moduleId') ?? '')
   const [maxEpochs, setMaxEpochs] = useState(2)
@@ -77,7 +78,7 @@ export default function Training() {
     setStartErr('')
     try {
       await startTrainingJob({
-        model_key: 'efficientad_small',
+        model_key: modelKey,
         dataset_id: Number(datasetId),
         scanner_unit_id: unitId ? Number(unitId) : null,
         module_id: moduleId ? Number(moduleId) : null,
@@ -142,7 +143,16 @@ export default function Training() {
           </div>
         )}
 
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
+          <label className="block text-xs font-medium">
+            AI Model <span className="text-red-500">*</span>
+            <select className={FIELD} value={modelKey} onChange={e => setModelKey(e.target.value)}>
+              <option value="patchcore">PatchCore (WideResNet-50)</option>
+              <option value="dinomaly">Dinomaly (DINOv2 ViT-B/14)</option>
+              <option value="efficientad_medium">EfficientAD-Medium</option>
+              <option value="efficientad_small">EfficientAD-Small</option>
+            </select>
+          </label>
           <label className="block text-xs font-medium">
             Training dataset <span className="text-red-500">*</span>
             <select className={FIELD} value={datasetId} onChange={e => { setDatasetId(e.target.value); setStartErr('') }}>

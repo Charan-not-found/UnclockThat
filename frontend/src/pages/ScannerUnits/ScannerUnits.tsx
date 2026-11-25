@@ -489,8 +489,8 @@ export default function ScannerUnits() {
                             </p>
                           </div>
                           <div className="flex items-center gap-1.5">
-                            {m.model_key === 'efficientad_small' && (
-                              <Button size="sm" variant="secondary" onClick={() => navigate(`/training?unitId=${selectedUnit.id}&moduleId=${m.id}`)}>
+                            {['efficientad_small', 'efficientad_medium', 'patchcore', 'dinomaly'].includes(m.model_key) && (
+                              <Button size="sm" variant="secondary" onClick={() => navigate(`/training?unitId=${selectedUnit.id}&moduleId=${m.id}&modelKey=${m.model_key}`)}>
                                 Train
                               </Button>
                             )}
