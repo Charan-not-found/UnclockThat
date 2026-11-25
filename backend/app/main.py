@@ -51,10 +51,14 @@ def create_app() -> FastAPI:
     )
     application.include_router(api_router, prefix=settings.api_v1_prefix)
 
-    # Serve uploaded images as static files so the inspection detail page can display them
+    # Serve uploaded images and inspection heatmaps as static files
     uploads_dir = settings.storage_root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     application.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+
+    results_dir = settings.storage_root / "inspection_results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    application.mount("/results", StaticFiles(directory=str(results_dir)), name="results")
 
     return application
 

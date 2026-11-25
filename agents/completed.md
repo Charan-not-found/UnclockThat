@@ -190,3 +190,4 @@ npm.cmd --prefix frontend run build
 | M5 — Training & evaluation | 🔲 Planned | Real training jobs, checkpoint management |
 | M6 — Analytics & reports | ✅ **Done** | Server-driven charts with definitions |
 | M7 — Production hardening | 🔲 Planned | Auth, tenant isolation, audit log, accessibility |
+ 

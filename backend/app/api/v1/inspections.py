@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
 from backend.app.database.connection import get_db
+from backend.app.models.efficientad_adapter import EfficientAdAdapter
 from backend.app.database.repositories.inspection_repository import (
     AnomalyResultRepository,
     InspectionRepository,
@@ -394,10 +395,24 @@ async def run_inspection(
     stored_name = f"{uuid.uuid4().hex}{safe_ext}"
     stored_path = upload_dir / stored_name
 
+    heatmap_path: Optional[str] = None
+    processing_time_ms: Optional[float] = None
+    confidence_score: float = 0.89
+    used_model_name: Optional[str] = None
+
     if file is not None:
         raw_bytes = await file.read()
         stored_path.write_bytes(raw_bytes)
-        anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
+        if EfficientAdAdapter.is_available():
+            pred = EfficientAdAdapter.predict_bytes(raw_bytes, threshold=threshold)
+            anomaly_score = pred["anomaly_score"]
+            confidence_score = pred["confidence_score"]
+            defects = [DefectOut(**d) for d in pred["defects"]]
+            heatmap_path = pred["heatmap_path"]
+            processing_time_ms = pred["processing_time_ms"]
+            used_model_name = pred["model_name"]
+        else:
+            anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
     else:
         anomaly_score, defects = 0.2, []
 
@@ -424,14 +439,22 @@ async def run_inspection(
     )
 
     active_models = ModelConfigRepository(db).list_active_by_manufacturer(mfg_id)
-    model_cfg_id = active_models[0].id if active_models else None
+    model_cfg_id = None
+    if used_model_name:
+        matched = next((m for m in active_models if m.name == used_model_name), None)
+        if matched:
+            model_cfg_id = matched.id
+    if model_cfg_id is None and active_models:
+        model_cfg_id = active_models[0].id
 
     ar = AnomalyResultRepository(db).create(
         inspection_id=insp.id,
         model_config_id=model_cfg_id,
         anomaly_score=anomaly_score,
-        confidence_score=0.89,
+        confidence_score=confidence_score,
         is_anomalous=bool(defects or anomaly_score >= threshold),
+        heatmap_file_path=heatmap_path,
+        processing_time_ms=processing_time_ms,
         bounding_boxes_json=[d.model_dump() for d in defects],
     )
 
