@@ -1,0 +1,4 @@
+import { Loader2, Inbox, AlertTriangle } from 'lucide-react'
+export const LoadingState = ({ label='Loading…' }) => <div className="flex items-center justify-center gap-2 p-10 text-slate-500"><Loader2 className="animate-spin" size={18}/>{label}</div>
+export const EmptyState = ({ title, hint }: { title: string; hint?: string }) => <div className="flex flex-col items-center p-10 text-center text-slate-500"><Inbox size={28}/><p className="mt-2 font-medium text-slate-700">{title}</p>{hint && <p className="text-sm">{hint}</p>}</div>
+export const ErrorState = ({ message, onRetry }: { message: string; onRetry?: () => void }) => <div className="flex flex-col items-center p-10 text-center"><AlertTriangle className="text-red-500" size={28}/><p className="mt-2 font-medium">{message}</p>{onRetry && <button onClick={onRetry} className="mt-2 text-sm text-blue-600 underline">Try again</button>}</div>
