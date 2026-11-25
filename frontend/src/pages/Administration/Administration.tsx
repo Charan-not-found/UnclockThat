@@ -44,10 +44,10 @@ export default function Administration() {
               Registers the downloaded pretrained model weights (EfficientAD-Small, EfficientAD-Medium, YOLO11n-Seg)
               and creates a default manufacturer + pipeline. Idempotent — safe to run multiple times.
             </p>
-            <div className="mt-3 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-              <strong>Note:</strong> Downloaded weights are registered as <em>Disabled</em> — they require student network
-              training (EfficientAD) or fine-tuning (YOLO) before they can run real inference. The OpenCV heuristic
-              is registered as the only currently <em>Ready</em> model.
+            <div className="mt-3 rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-800">
+              <strong>Note:</strong> Un-trained pretrained weights are seeded as <em>Disabled</em> until trained or
+              fine-tuned. Models with a trained checkpoint (such as <em>EfficientAD-Small</em>) or the OpenCV fallback
+              are marked <em>Ready</em>.
             </div>
 
             <Button className="mt-3" size="sm" loading={seeding} onClick={runSeed}>

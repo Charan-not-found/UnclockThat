@@ -56,13 +56,19 @@ export default function Models() {
         <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>
       </div>
 
-      {/* Important disclaimer */}
+      {/* Model readiness summary */}
       <div className="card px-4 py-3 bg-blue-50 border-blue-200">
         <div className="flex items-start gap-2">
           <Info size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
           <div className="text-xs text-blue-800 space-y-1">
-            <p><strong>Model readiness:</strong> Downloaded weight files (EfficientAD, YOLO) are listed as <em>Disabled</em> — they require training/fine-tuning before inference. Only the OpenCV Heuristic is currently <em>Ready</em> (active).</p>
-            <p>To register new models or run seeds, use <code className="bg-blue-100 px-1 rounded">POST /api/v1/admin/seed</code>.</p>
+            <p>
+              <strong>Model readiness:</strong>{' '}
+              {models && models.some(m => m.enabled)
+                ? `Active (Ready): ${models.filter(m => m.enabled).map(m => m.name).join(', ')}. `
+                : 'No models are currently active. '}
+              Un-trained pretrained weights remain <em>Disabled</em> until trained.
+            </p>
+            <p>To register default models, use Administration or <code className="bg-blue-100 px-1 rounded">POST /api/v1/admin/seed</code>.</p>
           </div>
         </div>
       </div>

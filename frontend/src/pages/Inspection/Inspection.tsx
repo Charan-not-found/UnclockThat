@@ -89,13 +89,13 @@ export default function Inspection() {
         <p>Upload an image and run the prototype inspection pipeline.</p>
       </div>
 
-      {/* OpenCV heuristic disclaimer */}
-      <div className="card px-4 py-3 bg-amber-50 border-amber-200">
+      {/* Inference engine info */}
+      <div className="card px-4 py-3 bg-blue-50 border-blue-200">
         <div className="flex items-start gap-2">
-          <AlertCircle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
-          <p className="text-xs text-amber-800">
-            <strong>Prototype signal:</strong> This runs an OpenCV Gaussian-blur difference heuristic — not a trained AI model.
-            Results are for development testing only. The EfficientAD and YOLO weights require training before use.
+          <AlertCircle size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-blue-800">
+            <strong>Inference engine:</strong> Uses the trained <em>EfficientAD-Small</em> model when its checkpoint is
+            available, or falls back to the OpenCV heuristic otherwise.
           </p>
         </div>
       </div>
