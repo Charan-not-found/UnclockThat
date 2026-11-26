@@ -66,9 +66,13 @@ export default function ScannerUnits() {
   const [modModelKey, setModModelKey] = useState('efficientad_small')
   const [modDatasetId, setModDatasetId] = useState<number | ''>('')
   const [modOutputs, setModOutputs] = useState<string[]>(['anomaly_score', 'heatmap'])
+  const [modWeight, setModWeight] = useState<number>(100)
   const [modDirty, setModDirty] = useState(false)
   const [modBusy, setModBusy] = useState(false)
   const [modErr, setModErr] = useState('')
+
+  // Highlight already used models toggle
+  const [highlightUsed, setHighlightUsed] = useState(true)
 
   // Inline dataset upload inside Screen 4
   const [inlineFiles, setInlineFiles] = useState<File[]>([])
@@ -172,14 +176,17 @@ export default function ScannerUnits() {
   const selectedCap = catalogue.find(m => m.model_key === modModelKey)
 
   const openAddModule = () => {
-    const defaultCap = catalogue.find(m => m.integration_state === 'available_integrated') ?? catalogue[0]
+    const defaultCap = catalogue.find(m => m.integration_state === 'available_integrated' && m.is_enabled !== false)
+      ?? catalogue.find(m => m.is_enabled !== false)
+      ?? catalogue[0]
     setEditingMod(null)
     setModName('')
     setModDesc('')
     setModPurpose('')
-    setModModelKey(defaultCap?.model_key ?? 'efficientad_small')
+    setModModelKey(defaultCap?.model_key ?? 'patchcore')
     setModDatasetId('')
     setModOutputs(defaultCap ? defaultCap.supported_outputs.map(o => o.key) : ['anomaly_score'])
+    setModWeight(100)
     setModDirty(false)
     setModErr('')
     setInlineFiles([])
@@ -195,7 +202,8 @@ export default function ScannerUnits() {
     setModPurpose(m.purpose ?? '')
     setModModelKey(m.model_key)
     setModDatasetId(m.dataset_id ?? '')
-    setModOutputs(m.selected_outputs)
+    setModOutputs([...(m.selected_outputs ?? [])])
+    setModWeight(m.weight ?? 100)
     setModDirty(false)
     setModErr('')
     setInlineFiles([])
@@ -262,6 +270,7 @@ export default function ScannerUnits() {
         model_key: modModelKey,
         dataset_id: modDatasetId === '' ? null : Number(modDatasetId),
         selected_outputs: modOutputs,
+        weight: Math.max(1, Math.min(100, Number(modWeight) || 100)),
       }
       if (modMode === 'edit' && editingMod) {
         await updateModule(selectedUnit.id, editingMod.id, payload)
@@ -454,6 +463,11 @@ export default function ScannerUnits() {
                       Analysis Modules ({selectedUnit.modules.length})
                     </h3>
                     <div className="flex gap-2">
+                      {selectedUnit.modules.some(m => ['efficientad_small', 'efficientad_medium', 'patchcore', 'dinomaly', 'omniposead', 'anomalydino'].includes(m.model_key)) && (
+                        <Button size="sm" variant="secondary" onClick={() => navigate(`/training?unitId=${selectedUnit.id}&moduleId=ALL`)}>
+                          Train All
+                        </Button>
+                      )}
                       {selectedUnit.modules.some(m => m.state === 'Ready') && (
                         <Button size="sm" variant="secondary" onClick={() => navigate(`/test-sample?scannerId=${selectedUnit.id}`)}>
                           <Play size={13} /> Test Sample
@@ -478,6 +492,9 @@ export default function ScannerUnits() {
                             <div className="flex items-center gap-2">
                               <span className="font-medium text-sm" style={{ color: 'var(--color-text-primary)' }}>{m.name}</span>
                               <StatusBadge value={m.state} />
+                              <span className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                Weight: {m.weight ?? 100}/100
+                              </span>
                             </div>
                             <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
                               Model: <strong>{m.model_display_name}</strong>
@@ -489,7 +506,7 @@ export default function ScannerUnits() {
                             </p>
                           </div>
                           <div className="flex items-center gap-1.5">
-                            {['efficientad_small', 'efficientad_medium', 'patchcore', 'dinomaly'].includes(m.model_key) && (
+                            {['efficientad_small', 'efficientad_medium', 'patchcore', 'dinomaly', 'omniposead', 'anomalydino'].includes(m.model_key) && (
                               <Button size="sm" variant="secondary" onClick={() => navigate(`/training?unitId=${selectedUnit.id}&moduleId=${m.id}&modelKey=${m.model_key}`)}>
                                 Train
                               </Button>
@@ -536,21 +553,41 @@ export default function ScannerUnits() {
                     </label>
                   </section>
 
-                  {/* 2. AI Model Selection (dark-theme friendly) */}
+                  {/* 2. AI Model Selection (dark-theme friendly + highlight already used models) */}
                   <section className="space-y-2 border-t pt-4" style={{ borderColor: 'var(--color-border)' }}>
-                    <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
-                      2. AI model selection
-                    </h3>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
+                        2. AI model selection
+                      </h3>
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--color-text-secondary)' }}>
+                        <input
+                          type="checkbox"
+                          checked={highlightUsed}
+                          onChange={e => setHighlightUsed(e.target.checked)}
+                          className="accent-blue-600"
+                        />
+                        Highlight already used models
+                      </label>
+                    </div>
                     <div className="grid gap-2">
-                      {catalogue.map(cap => {
-                        const integrated = cap.integration_state === 'available_integrated'
+                      {catalogue.filter(cap => cap.is_enabled !== false).map(cap => {
+                        const integrated = cap.integration_state === 'available_integrated' && cap.is_enabled !== false
                         const active = modModelKey === cap.model_key
+                        const isUsedInUnit = selectedUnit.modules.some(
+                          m => m.model_key === cap.model_key && m.id !== editingMod?.id,
+                        )
+                        const showUsedHighlight = highlightUsed && isUsedInUnit
                         return (
                           <label
                             key={cap.model_key}
                             className={`flex items-start gap-3 rounded-md border p-3 text-sm transition-colors ${
-                              !integrated ? 'opacity-65 cursor-not-allowed popup-subtle' :
-                              active ? 'border-blue-500 bg-blue-500/10 cursor-pointer' : 'cursor-pointer popup-subtle hover:border-blue-400'
+                              !integrated
+                                ? 'opacity-55 cursor-not-allowed popup-subtle'
+                                : active
+                                  ? 'border-blue-500 bg-blue-500/10 cursor-pointer'
+                                  : showUsedHighlight
+                                    ? 'border-amber-500/70 bg-amber-500/10 cursor-pointer hover:border-amber-400'
+                                    : 'cursor-pointer popup-subtle hover:border-blue-400'
                             }`}
                           >
                             <input
@@ -567,10 +604,17 @@ export default function ScannerUnits() {
                                 <Cpu size={14} style={{ color: 'var(--color-text-secondary)' }} />
                                 <span className="font-medium" style={{ color: 'var(--color-text-primary)' }}>{cap.display_name}</span>
                                 <span className="text-xs font-mono" style={{ color: 'var(--color-text-muted)' }}>{cap.model_family}</span>
-                                {integrated ? (
+                                {cap.is_enabled === false ? (
+                                  <StatusBadge value="Disabled" />
+                                ) : integrated ? (
                                   <StatusBadge value={cap.ready_for_inference ? 'Ready' : 'Configured'} />
                                 ) : (
                                   <StatusBadge value="Unavailable" />
+                                )}
+                                {showUsedHighlight && (
+                                  <span className="rounded-full bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-xs font-medium text-amber-500">
+                                    Already used
+                                  </span>
                                 )}
                               </div>
                               <p className="text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>{cap.task}</p>
@@ -669,6 +713,40 @@ export default function ScannerUnits() {
                           </div>
                         </label>
                       ))}
+                    </div>
+                    <div className="mt-3 rounded border p-3 popup-subtle">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                            Module Weight (1–100)
+                          </div>
+                          <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                            Used to compute weighted-average scores when multiple modules produce the same output.
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min={1}
+                            max={100}
+                            value={modWeight}
+                            onChange={e => { setModWeight(Number(e.target.value)); setModDirty(true) }}
+                            className="w-28 accent-blue-600"
+                          />
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={modWeight}
+                            onChange={e => {
+                              const v = Math.max(1, Math.min(100, Number(e.target.value) || 1))
+                              setModWeight(v)
+                              setModDirty(true)
+                            }}
+                            className="w-16 px-2 py-1 text-sm text-center input-field"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </section>
                 </div>

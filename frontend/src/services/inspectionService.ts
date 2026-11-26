@@ -34,6 +34,7 @@ export async function runInspection(
     scannerUnitId?: number | null
     threshold: number
     fileName: string
+    moduleWeights?: Record<number, number>
   },
   file?: File,
 ): Promise<InspectionRunResult> {
@@ -44,6 +45,9 @@ export async function runInspection(
   if (req.scannerUnitId != null) form.append('scannerUnitId', String(req.scannerUnitId))
   form.append('threshold', String(req.threshold))
   form.append('fileName', req.fileName)
+  if (req.moduleWeights && Object.keys(req.moduleWeights).length > 0) {
+    form.append('moduleWeights', JSON.stringify(req.moduleWeights))
+  }
   if (file) form.append('file', file)
   const { data } = await apiClient.post<InspectionRunResult>('/inspections', form, {
     headers: { 'Content-Type': 'multipart/form-data' },

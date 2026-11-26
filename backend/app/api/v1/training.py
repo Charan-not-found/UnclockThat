@@ -93,8 +93,8 @@ def _update_progress(db: Session, job_id: int, pct: int, step: str, log_line: Op
     db.commit()
 
 
-def _run_efficientad_job(job_id: int) -> None:
-    """Execute real EfficientAD-Small training in a background thread with real step updates."""
+def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
+    """Execute real training job in a background thread with live step updates."""
     db = SessionLocal()
     try:
         run = db.get(TrainingRun, job_id)
@@ -107,7 +107,7 @@ def _run_efficientad_job(job_id: int) -> None:
             if mod:
                 mod.state = "Training"
         db.commit()
-        _update_progress(db, job_id, 5, "Initializing environment", "Starting EfficientAD-Small training job.")
+        _update_progress(db, job_id, 5, "Initializing environment", f"Starting {run.model_key} training job.")
 
         settings = get_settings()
         tmp_dir = settings.storage_root / "temporary"
@@ -128,6 +128,111 @@ def _run_efficientad_job(job_id: int) -> None:
         device_label = f"GPU ({torch.cuda.get_device_name(0)})" if use_cuda else "CPU"
         ckpt_dir = BASE_DIR / "artifacts" / "checkpoints" / f"run_{job_id}"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+        ds = db.get(DatasetRecord, run.dataset_id) if run.dataset_id else None
+        if ds is None or not Path(ds.extracted_path).is_dir() or ds.valid_image_count <= 0:
+            raise ValueError("Training issue: Uploaded dataset is missing, empty, or has no valid images.")
+
+        ds_root = Path(ds.extracted_path)
+        _update_progress(db, job_id, 15, "Loading validated dataset", f"Loaded dataset '{ds.name}' ({ds.valid_image_count} valid images).")
+
+        if run.model_key == "anomalydino":
+            from backend.app.models.anomalydino_adapter import AnomalyDINOAdapter
+
+            trained_dir = BASE_DIR / "artifacts" / "trained"
+            trained_dir.mkdir(parents=True, exist_ok=True)
+            if run.module_id:
+                mod_obj = db.get(AnalysisModule, run.module_id)
+                cloned_rel = (mod_obj.config_json or {}).get("cloned_weights_path") if mod_obj else None
+                out_ckpt = (BASE_DIR / cloned_rel) if cloned_rel else (trained_dir / f"module_{run.module_id}_anomalydino.pt")
+            else:
+                out_ckpt = trained_dir / f"run_{job_id}_anomalydino.pt"
+
+            _update_progress(db, job_id, 22, f"Building AnomalyDINO memory bank on {device_label}", "Extracting DINOv2 patch tokens (with PCA masking)...")
+            metrics = AnomalyDINOAdapter.fit_dataset(
+                dataset_dir=ds_root,
+                out_path=out_ckpt,
+                progress_cb=lambda pct, msg: _update_progress(db, job_id, pct, msg, msg),
+            )
+            run = db.get(TrainingRun, job_id)
+            if run:
+                run.status = "Completed"
+                run.progress_pct = 100
+                run.current_step = "Completed"
+                logs = list(run.logs_json or [])
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                logs.append(f"[{ts}] AnomalyDINO bank built ({metrics.get('memory_bank_patches')} patches, PCA mask={metrics.get('pca_masking_enabled')}) -> {out_ckpt.relative_to(BASE_DIR)}")
+                run.logs_json = logs[-100:]
+                run.metrics_json = metrics
+                run.checkpoint_path = str(out_ckpt.relative_to(BASE_DIR))
+                run.completed_at = datetime.now(timezone.utc)
+            if run and run.module_id:
+                mod = db.get(AnalysisModule, run.module_id)
+                if mod:
+                    mod.state = "Ready"
+                    mod.dataset_id = run.dataset_id
+                    mc_id = (mod.config_json or {}).get("cloned_model_config_id")
+                    if mc_id:
+                        mc = db.get(ModelConfig, mc_id)
+                        if mc:
+                            mc.is_active = True
+                            mc.metrics_json = metrics
+                            mc.weights_file_path = str(out_ckpt.relative_to(BASE_DIR))
+                    if mod.scanner_unit_id:
+                        unit = db.get(ScannerUnit, mod.scanner_unit_id)
+                        if unit:
+                            unit.status = "Ready"
+            db.commit()
+            return
+
+        if run.model_key == "omniposead":
+            from backend.app.models.omnipose_adapter import OmniPoseAdapter
+
+            trained_dir = BASE_DIR / "artifacts" / "trained"
+            trained_dir.mkdir(parents=True, exist_ok=True)
+            if run.module_id:
+                mod_obj = db.get(AnalysisModule, run.module_id)
+                cloned_rel = (mod_obj.config_json or {}).get("cloned_weights_path") if mod_obj else None
+                out_ckpt = (BASE_DIR / cloned_rel) if cloned_rel else (trained_dir / f"module_{run.module_id}_omniposead.pt")
+            else:
+                out_ckpt = trained_dir / f"run_{job_id}_omniposead.pt"
+
+            _update_progress(db, job_id, 22, f"Indexing multi-view reference bank on {device_label}", "Extracting DINOv2 pose-agnostic features...")
+            metrics = OmniPoseAdapter.fit_dataset(
+                dataset_dir=ds_root,
+                out_path=out_ckpt,
+                progress_cb=lambda pct, msg: _update_progress(db, job_id, pct, msg, msg),
+            )
+            run = db.get(TrainingRun, job_id)
+            if run:
+                run.status = "Completed"
+                run.progress_pct = 100
+                run.current_step = "Completed"
+                logs = list(run.logs_json or [])
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                logs.append(f"[{ts}] OmniPoseAD bank built ({metrics.get('reference_views_indexed')} views) -> {out_ckpt.relative_to(BASE_DIR)}")
+                run.logs_json = logs[-100:]
+                run.metrics_json = metrics
+                run.checkpoint_path = str(out_ckpt.relative_to(BASE_DIR))
+                run.completed_at = datetime.now(timezone.utc)
+            if run and run.module_id:
+                mod = db.get(AnalysisModule, run.module_id)
+                if mod:
+                    mod.state = "Ready"
+                    mod.dataset_id = run.dataset_id
+                    mc_id = (mod.config_json or {}).get("cloned_model_config_id")
+                    if mc_id:
+                        mc = db.get(ModelConfig, mc_id)
+                        if mc:
+                            mc.is_active = True
+                            mc.metrics_json = metrics
+                            mc.weights_file_path = str(out_ckpt.relative_to(BASE_DIR))
+                    if mod.scanner_unit_id:
+                        unit = db.get(ScannerUnit, mod.scanner_unit_id)
+                        if unit:
+                            unit.status = "Ready"
+            db.commit()
+            return
 
         if run.model_key == "patchcore":
             from anomalib.models import Patchcore
@@ -165,12 +270,7 @@ def _run_efficientad_job(job_id: int) -> None:
             model = EfficientAd(model_size=model_size, imagenet_dir=str(aux_dir))
             effective_epochs = run.max_epochs
 
-        ds = db.get(DatasetRecord, run.dataset_id) if run.dataset_id else None
-        if ds is None or not Path(ds.extracted_path).is_dir() or ds.valid_image_count <= 0:
-            raise ValueError("Training issue: Uploaded dataset is missing, empty, or has no valid images.")
-
-        ds_root = Path(ds.extracted_path)
-        _update_progress(db, job_id, 20, "Loading validated dataset", f"Loaded dataset '{ds.name}' ({ds.valid_image_count} valid images).")
+        # Aux imagenette prep for EfficientAD
 
         # Prepare local auxiliary images using a small subset of dataset images if needed
         aux_dir = tmp_dir / "aux_imagenette"
@@ -296,7 +396,18 @@ def _run_efficientad_job(job_id: int) -> None:
             db.commit()
     finally:
         db.close()
-        _train_lock.release()
+        if release_lock and _train_lock.locked():
+            _train_lock.release()
+
+
+def _run_chained_batch(job_ids: list[int]) -> None:
+    """Run multiple training jobs sequentially (one-by-one) and release lock at the end."""
+    try:
+        for jid in job_ids:
+            _run_efficientad_job(jid, release_lock=False)
+    finally:
+        if _train_lock.locked():
+            _train_lock.release()
 
 
 @router.get("", response_model=list[TrainingJobOut])
@@ -313,20 +424,121 @@ def get_training_job(job_id: int, db: Session = Depends(get_db)) -> TrainingJobO
     return _to_out(row)
 
 
+class BatchTrainingJobIn(BaseModel):
+    scanner_unit_id: int
+    dataset_id: Optional[int] = None
+    mode: str = "chained"  # "chained" (one-by-one) or "simultaneous" (parallel)
+    max_epochs: int = Field(default=2, ge=1, le=50)
+    limit_train_batches: int = Field(default=50, ge=5, le=2000)
+
+
+@router.post("/batch", response_model=list[TrainingJobOut], status_code=201)
+def start_batch_training(body: BatchTrainingJobIn, db: Session = Depends(get_db)) -> list[TrainingJobOut]:
+    """Train all trainable Analysis Modules in a Scanner Unit (chained one-by-one or simultaneous)."""
+    if body.mode not in ("chained", "simultaneous"):
+        raise HTTPException(status_code=422, detail="mode must be 'chained' or 'simultaneous'")
+
+    unit = db.get(ScannerUnit, body.scanner_unit_id)
+    if unit is None:
+        raise HTTPException(status_code=404, detail="Scanner Unit not found")
+
+    trainable_keys = {"patchcore", "dinomaly", "omniposead", "anomalydino", "efficientad_small", "efficientad_medium"}
+    mods = [m for m in unit.modules if m.model_key in trainable_keys]
+    if not mods:
+        raise HTTPException(status_code=422, detail=f"Scanner Unit '{unit.name}' has no trainable modules.")
+
+    # Validate every module has an enabled model and valid dataset before launching
+    prepared: list[tuple[AnalysisModule, DatasetRecord]] = []
+    for mod in mods:
+        cap = get_model_capability(mod.model_key)
+        if cap is None or not cap.get("is_enabled", True):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Module '{mod.name}' uses '{mod.model_key}' which is disabled in Settings.",
+            )
+        eff_ds_id = mod.dataset_id or body.dataset_id
+        if eff_ds_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Training issue: Module '{mod.name}' has no dataset assigned. Select or assign a dataset first.",
+            )
+        ds = db.get(DatasetRecord, eff_ds_id)
+        if ds is None or ds.validation_status != "Validated" or ds.valid_image_count <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Training issue: Dataset for module '{mod.name}' is missing, empty, or invalid.",
+            )
+        prepared.append((mod, ds))
+
+    if not _train_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A training job is already running.")
+
+    try:
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        runs: list[TrainingRun] = []
+        for mod, ds in prepared:
+            run = TrainingRun(
+                scanner_unit_id=unit.id,
+                module_id=mod.id,
+                dataset_id=ds.id,
+                model_key=mod.model_key,
+                strategy="initial_training",
+                status="Queued",
+                progress_pct=0,
+                current_step=f"Queued ({body.mode})",
+                logs_json=[f"[{ts}] Queued ({body.mode}) for module '{mod.name}' with dataset '{ds.name}' ({ds.valid_image_count} images)."],
+                max_epochs=body.max_epochs,
+                limit_train_batches=body.limit_train_batches,
+            )
+            db.add(run)
+            runs.append(run)
+        db.commit()
+        for r in runs:
+            db.refresh(r)
+
+        job_ids = [r.id for r in runs]
+        if body.mode == "chained":
+            t = threading.Thread(target=_run_chained_batch, args=(job_ids,), daemon=True)
+            t.start()
+        else:
+            def _run_parallel_batch(ids: list[int]) -> None:
+                threads = [threading.Thread(target=_run_efficientad_job, args=(jid, False), daemon=True) for jid in ids]
+                for th in threads:
+                    th.start()
+                for th in threads:
+                    th.join()
+                if _train_lock.locked():
+                    _train_lock.release()
+
+            t = threading.Thread(target=_run_parallel_batch, args=(job_ids,), daemon=True)
+            t.start()
+
+        return [_to_out(r) for r in runs]
+    except Exception:
+        if _train_lock.locked():
+            _train_lock.release()
+        raise
+
+
 @router.post("", response_model=TrainingJobOut, status_code=201)
 def start_training_job(body: TrainingJobIn, db: Session = Depends(get_db)) -> TrainingJobOut:
     cap = get_model_capability(body.model_key)
     if cap is None:
         raise HTTPException(status_code=422, detail=f"Unknown model_key: {body.model_key}")
+    if not cap.get("is_enabled", True):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Model '{cap['display_name']}' is currently disabled in Settings.",
+        )
     if body.strategy not in cap["supported_training_strategies"]:
         raise HTTPException(
             status_code=422,
             detail=f"Model '{cap['display_name']}' does not support training strategy '{body.strategy}'.",
         )
-    if body.model_key not in ("efficientad_small", "efficientad_medium", "patchcore", "dinomaly"):
+    if body.model_key not in ("efficientad_small", "efficientad_medium", "patchcore", "dinomaly", "omniposead", "anomalydino"):
         raise HTTPException(
             status_code=422,
-            detail="Training runner supports 'patchcore', 'dinomaly', 'efficientad_small', and 'efficientad_medium'.",
+            detail="Training runner supports 'patchcore', 'dinomaly', 'omniposead', 'anomalydino', 'efficientad_small', and 'efficientad_medium'.",
         )
 
     # If training a specific Analysis Module, default to that module's dataset_id

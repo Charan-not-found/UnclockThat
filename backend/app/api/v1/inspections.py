@@ -7,7 +7,7 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -20,7 +20,9 @@ from backend.app.core.config import BASE_DIR, get_settings
 from backend.app.database.connection import get_db
 from backend.app.database.models.scanner import CorrectionRecord, ScannerUnit
 from backend.app.models.anomalib_adapter import AnomalibCheckpointAdapter
+from backend.app.models.anomalydino_adapter import AnomalyDINOAdapter
 from backend.app.models.efficientad_adapter import EfficientAdAdapter
+from backend.app.models.omnipose_adapter import OmniPoseAdapter
 from backend.app.models.yolo_adapter import YoloSegAdapter
 from backend.app.database.repositories.inspection_repository import (
     AnomalyResultRepository,
@@ -123,6 +125,29 @@ class InspectionListItemOut(BaseModel):
     requires_review: bool
 
 
+class ModuleScanResultOut(BaseModel):
+    module_id: int
+    module_name: str
+    model_key: str
+    model_display_name: str
+    weight: int
+    weight_ratio: float
+    selected_outputs: list[str] = []
+    anomaly_score: float
+    confidence_score: float
+    defects: list[DefectOut] = []
+    defect_classes: list[str] = []
+    heatmap_url: Optional[str] = None
+    processing_time_ms: Optional[float] = None
+
+
+class WeightedOutputOut(BaseModel):
+    output_key: str
+    label: str
+    weighted_value: float
+    weights_used: list[dict[str, Any]] = []
+
+
 class InspectionRunOut(BaseModel):
     inspectionId: str
     quality_score: int
@@ -132,6 +157,9 @@ class InspectionRunOut(BaseModel):
     defects: list[DefectOut]
     model_used: str = "OpenCV Heuristic"
     heatmap_url: Optional[str] = None
+    module_results: list[ModuleScanResultOut] = []
+    weighted_outputs: list[WeightedOutputOut] = []
+    distinct_outputs: dict[str, Any] = {}
     # Legacy compat
     score: int
     isMock: bool = False
@@ -419,6 +447,80 @@ def get_inspection(inspection_id: str, db: Session = Depends(get_db)) -> Inspect
     return detail
 
 
+def _run_single_module(
+    raw_bytes: Optional[bytes],
+    model_key: Optional[str],
+    cloned_ckpt_path: Optional[Path],
+    threshold: float,
+) -> dict[str, Any]:
+    """Execute one model adapter (or OpenCV fallback) on raw image bytes."""
+    if raw_bytes is None:
+        return {
+            "anomaly_score": 0.2,
+            "confidence_score": 0.89,
+            "defects": [],
+            "heatmap_path": None,
+            "heatmap_url": None,
+            "processing_time_ms": None,
+            "model_name": "OpenCV Heuristic",
+        }
+
+    pred: Optional[dict[str, Any]] = None
+    anomaly_score = 0.0
+    defects: list[DefectOut] = []
+
+    if model_key in ("yolo11n_seg", "yolo11m_seg"):
+        default_yolo = BASE_DIR / "artifacts" / "pretrained" / (
+            "yolo11m-seg.pt" if model_key == "yolo11m_seg" else "yolo11n-seg.pt"
+        )
+        w_path = cloned_ckpt_path or default_yolo
+        if YoloSegAdapter.is_available(w_path):
+            pred = YoloSegAdapter.predict_bytes(raw_bytes, threshold=threshold, weights_path=w_path)
+        else:
+            anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
+    elif model_key == "omniposead" and cloned_ckpt_path is not None:
+        pred = OmniPoseAdapter.predict_bytes(
+            raw_bytes, bank_path=cloned_ckpt_path, threshold=threshold
+        )
+    elif model_key == "anomalydino" and cloned_ckpt_path is not None:
+        pred = AnomalyDINOAdapter.predict_bytes(
+            raw_bytes, bank_path=cloned_ckpt_path, threshold=threshold
+        )
+    elif model_key in ("patchcore", "dinomaly") and cloned_ckpt_path is not None:
+        pred = AnomalibCheckpointAdapter.predict_bytes(
+            raw_bytes, model_key=model_key, ckpt_path=cloned_ckpt_path, threshold=threshold
+        )
+    elif (
+        model_key in ("efficientad_small", "efficientad_medium")
+        or (model_key is None and EfficientAdAdapter.is_available())
+    ) and EfficientAdAdapter.is_available(cloned_ckpt_path):
+        pred = EfficientAdAdapter.predict_bytes(raw_bytes, threshold=threshold, ckpt_path=cloned_ckpt_path)
+    else:
+        anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
+
+    if pred is not None:
+        hp = pred["heatmap_path"]
+        return {
+            "anomaly_score": float(pred["anomaly_score"]),
+            "confidence_score": float(pred["confidence_score"]),
+            "defects": [DefectOut(**d) for d in pred["defects"]],
+            "heatmap_path": hp,
+            "heatmap_url": f"/results/{Path(hp).name}" if hp else None,
+            "processing_time_ms": pred["processing_time_ms"],
+            "model_name": pred["model_name"],
+        }
+
+    return {
+        "anomaly_score": float(anomaly_score),
+        "confidence_score": 0.89,
+        "defects": defects,
+        "heatmap_path": None,
+        "heatmap_url": None,
+        "processing_time_ms": None,
+        "model_name": "OpenCV Heuristic",
+    }
+
+
 @router.post("", response_model=InspectionRunOut)
 async def run_inspection(
     industry: str = Form("Automotive"),
@@ -427,10 +529,11 @@ async def run_inspection(
     scannerUnitId: Optional[int] = Form(None),
     threshold: float = Form(0.5),
     fileName: str = Form("upload.png"),
+    moduleWeights: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ) -> InspectionRunOut:
-    """Save uploaded image, run configured Scanner Unit / AI model, and persist result."""
+    """Save uploaded image, run all Ready modules in Scanner Unit (or default), and aggregate results."""
     settings = get_settings()
     upload_dir = settings.storage_root / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -439,70 +542,191 @@ async def run_inspection(
     stored_name = f"{uuid.uuid4().hex}{safe_ext}"
     stored_path = upload_dir / stored_name
 
-    heatmap_path: Optional[str] = None
-    heatmap_url: Optional[str] = None
-    processing_time_ms: Optional[float] = None
-    confidence_score: float = 0.89
-    used_model_name: str = "OpenCV Heuristic"
-
-    # Determine model preference & cloned checkpoint from Scanner Unit if provided
-    preferred_model_key: Optional[str] = None
-    cloned_ckpt_path: Optional[Path] = None
-    if scannerUnitId is not None:
-        unit = db.scalar(
-            select(ScannerUnit)
-            .options(selectinload(ScannerUnit.modules))
-            .where(ScannerUnit.id == scannerUnitId)
-        )
-        if unit is None:
-            raise HTTPException(status_code=404, detail="Scanner Unit not found")
-        industry = unit.industry or industry
-        product = unit.product_name or product
-        pipelineId = unit.name
-        ready_mods = [m for m in unit.modules if m.state == "Ready"]
-        if ready_mods:
-            preferred_model_key = ready_mods[0].model_key
-            cw = (ready_mods[0].config_json or {}).get("cloned_weights_path")
-            if cw and (BASE_DIR / cw).is_file():
-                cloned_ckpt_path = BASE_DIR / cw
-
+    raw_bytes: Optional[bytes] = None
     if file is not None:
         raw_bytes = await file.read()
         stored_path.write_bytes(raw_bytes)
-        if preferred_model_key in ("yolo11n_seg", "yolo11m_seg"):
-            default_yolo = BASE_DIR / "artifacts" / "pretrained" / (
-                "yolo11m-seg.pt" if preferred_model_key == "yolo11m_seg" else "yolo11n-seg.pt"
-            )
-            w_path = cloned_ckpt_path or default_yolo
-            if YoloSegAdapter.is_available(w_path):
-                pred = YoloSegAdapter.predict_bytes(raw_bytes, threshold=threshold, weights_path=w_path)
-            else:
-                anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
-                pred = None
-        elif preferred_model_key in ("patchcore", "dinomaly") and cloned_ckpt_path is not None:
-            pred = AnomalibCheckpointAdapter.predict_bytes(
-                raw_bytes, model_key=preferred_model_key, ckpt_path=cloned_ckpt_path, threshold=threshold
-            )
-        elif (
-            preferred_model_key in ("efficientad_small", "efficientad_medium")
-            or (preferred_model_key is None and EfficientAdAdapter.is_available())
-        ) and EfficientAdAdapter.is_available(cloned_ckpt_path):
-            pred = EfficientAdAdapter.predict_bytes(raw_bytes, threshold=threshold, ckpt_path=cloned_ckpt_path)
-        else:
-            anomaly_score, defects = _analyze_image_bytes(raw_bytes, threshold)
-            pred = None
 
-        if pred is not None:
-            anomaly_score = pred["anomaly_score"]
-            confidence_score = pred["confidence_score"]
-            defects = [DefectOut(**d) for d in pred["defects"]]
-            heatmap_path = pred["heatmap_path"]
-            processing_time_ms = pred["processing_time_ms"]
-            used_model_name = pred["model_name"]
-            if heatmap_path:
-                heatmap_url = f"/results/{Path(heatmap_path).name}"
+    weight_overrides: dict[int, int] = {}
+    if moduleWeights:
+        try:
+            parsed = json.loads(moduleWeights)
+            if isinstance(parsed, dict):
+                for k, v in parsed.items():
+                    weight_overrides[int(k)] = max(1, min(100, int(v)))
+        except (ValueError, TypeError):
+            pass
+
+    if scannerUnitId is None:
+        raise HTTPException(status_code=422, detail="A Scanner Unit must be selected before running a scan.")
+
+    unit = db.scalar(
+        select(ScannerUnit)
+        .options(selectinload(ScannerUnit.modules))
+        .where(ScannerUnit.id == scannerUnitId)
+    )
+    if unit is None:
+        raise HTTPException(status_code=404, detail="Scanner Unit not found")
+    industry = unit.industry or industry
+    product = unit.product_name or product
+    pipelineId = unit.name
+    ready_mods = [m for m in unit.modules if m.state == "Ready"]
+
+    module_results: list[ModuleScanResultOut] = []
+    weighted_outputs: list[WeightedOutputOut] = []
+    distinct_outputs: dict[str, Any] = {}
+    per_module_persist: list[dict[str, Any]] = []
+
+    if ready_mods:
+        raw_weights = [
+            max(1, min(100, int(weight_overrides.get(m.id, (m.config_json or {}).get("weight", 100)))))
+            for m in ready_mods
+        ]
+        total_weight = sum(raw_weights) or 1
+
+        for mod, w in zip(ready_mods, raw_weights):
+            cfg = mod.config_json or {}
+            cw = cfg.get("cloned_weights_path")
+            ckpt_path = (BASE_DIR / cw) if cw and (BASE_DIR / cw).is_file() else None
+            res = _run_single_module(raw_bytes, mod.model_key, ckpt_path, threshold)
+            ratio = round(w / total_weight, 4)
+            defect_classes = sorted({d.type for d in res["defects"] if d.type})
+            selected_outputs = list(mod.selected_outputs_json or [])
+            mod_out = ModuleScanResultOut(
+                module_id=mod.id,
+                module_name=mod.name,
+                model_key=mod.model_key,
+                model_display_name=res["model_name"],
+                weight=w,
+                weight_ratio=ratio,
+                selected_outputs=selected_outputs,
+                anomaly_score=round(res["anomaly_score"], 4),
+                confidence_score=round(res["confidence_score"], 4),
+                defects=res["defects"],
+                defect_classes=defect_classes,
+                heatmap_url=res["heatmap_url"],
+                processing_time_ms=res["processing_time_ms"],
+            )
+            module_results.append(mod_out)
+            per_module_persist.append({**res, "module": mod})
+
+        if len(module_results) >= 2:
+            anomaly_score = round(
+                sum(r.anomaly_score * (w / total_weight) for r, w in zip(module_results, raw_weights)),
+                4,
+            )
+            confidence_score = round(
+                sum(r.confidence_score * (w / total_weight) for r, w in zip(module_results, raw_weights)),
+                4,
+            )
+            weighted_outputs = [
+                WeightedOutputOut(
+                    output_key="anomaly_score",
+                    label="Anomaly Score (Weighted Avg)",
+                    weighted_value=anomaly_score,
+                    weights_used=[
+                        {
+                            "module_id": r.module_id,
+                            "module_name": r.module_name,
+                            "weight": r.weight,
+                            "ratio": r.weight_ratio,
+                            "value": r.anomaly_score,
+                        }
+                        for r in module_results
+                    ],
+                ),
+                WeightedOutputOut(
+                    output_key="confidence_score",
+                    label="Confidence Score (Weighted Avg)",
+                    weighted_value=confidence_score,
+                    weights_used=[
+                        {
+                            "module_id": r.module_id,
+                            "module_name": r.module_name,
+                            "weight": r.weight,
+                            "ratio": r.weight_ratio,
+                            "value": r.confidence_score,
+                        }
+                        for r in module_results
+                    ],
+                ),
+            ]
+        else:
+            anomaly_score = module_results[0].anomaly_score
+            confidence_score = module_results[0].confidence_score
+
+        # Combine defects across all modules (deduplicated/tagged) and collect distinct outputs as-is
+        defects = []
+        for r in module_results:
+            for d in r.defects:
+                defects.append(d)
+
+        all_defect_classes = sorted({c for r in module_results for c in r.defect_classes})
+        heatmaps = [
+            {"module_id": r.module_id, "module_name": r.module_name, "heatmap_url": r.heatmap_url}
+            for r in module_results
+            if r.heatmap_url
+        ]
+        # Identify non-shared / distinct outputs from selected_outputs
+        output_counts: dict[str, int] = {}
+        for r in module_results:
+            for out_k in r.selected_outputs:
+                output_counts[out_k] = output_counts.get(out_k, 0) + 1
+        unique_outputs = []
+        for r in module_results:
+            for out_k in r.selected_outputs:
+                if output_counts.get(out_k, 0) == 1 or out_k in (
+                    "defect_class",
+                    "segmentation_mask",
+                    "bounding_boxes",
+                    "heatmap",
+                ):
+                    if out_k == "defect_class":
+                        summary = ", ".join(r.defect_classes) if r.defect_classes else "None detected"
+                    elif out_k in ("segmentation_mask", "bounding_boxes"):
+                        summary = f"{len(r.defects)} region(s)"
+                    elif out_k == "heatmap":
+                        summary = "Heatmap generated" if r.heatmap_url else "No heatmap"
+                    elif out_k == "anomaly_score":
+                        summary = f"{r.anomaly_score:.3f}"
+                    elif out_k == "confidence_score":
+                        summary = f"{r.confidence_score:.3f}"
+                    else:
+                        summary = out_k
+                    unique_outputs.append(
+                        {
+                            "module_id": r.module_id,
+                            "module_name": r.module_name,
+                            "output_key": out_k,
+                            "summary": summary,
+                            "shared": output_counts.get(out_k, 0) > 1,
+                        }
+                    )
+
+        distinct_outputs = {
+            "defect_classes": all_defect_classes,
+            "heatmaps": heatmaps,
+            "bounding_boxes_count": len(defects),
+            "unique_module_outputs": unique_outputs,
+        }
+        heatmap_path = next((p["heatmap_path"] for p in per_module_persist if p["heatmap_path"]), None)
+        heatmap_url = next((r.heatmap_url for r in module_results if r.heatmap_url), None)
+        processing_time_ms = sum((r.processing_time_ms or 0.0) for r in module_results) or None
+        used_model_name = (
+            f"Multi-Module ({len(module_results)}): " + " + ".join(r.model_display_name for r in module_results)
+            if len(module_results) > 1
+            else module_results[0].model_display_name
+        )
     else:
-        anomaly_score, defects = 0.2, []
+        single = _run_single_module(raw_bytes, None, None, threshold)
+        anomaly_score = single["anomaly_score"]
+        confidence_score = single["confidence_score"]
+        defects = single["defects"]
+        heatmap_path = single["heatmap_path"]
+        heatmap_url = single["heatmap_url"]
+        processing_time_ms = single["processing_time_ms"]
+        used_model_name = single["model_name"]
+        per_module_persist.append({**single, "module": None})
 
     if anomaly_score >= max(0.75, threshold + 0.2):
         decision = "FAIL"
@@ -517,6 +741,7 @@ async def run_inspection(
     insp = InspectionRepository(db).create(
         manufacturer_id=mfg_id,
         pipeline_config_id=pipe_id,
+        scanner_unit_id=scannerUnitId,
         product_serial=product,
         station_name="Web UI Station",
         image_file_path=str(stored_path),
@@ -527,24 +752,31 @@ async def run_inspection(
     )
 
     active_models = ModelConfigRepository(db).list_active_by_manufacturer(mfg_id)
-    model_cfg_id = None
-    if used_model_name:
-        matched = next((m for m in active_models if m.name == used_model_name), None)
-        if matched:
-            model_cfg_id = matched.id
-    if model_cfg_id is None and active_models:
-        model_cfg_id = active_models[0].id
+    primary_ar = None
+    for item in per_module_persist:
+        model_cfg_id = None
+        m_name = item["model_name"]
+        if m_name:
+            matched = next((m for m in active_models if m.name == m_name), None)
+            if matched:
+                model_cfg_id = matched.id
+        if model_cfg_id is None and active_models:
+            model_cfg_id = active_models[0].id
 
-    ar = AnomalyResultRepository(db).create(
-        inspection_id=insp.id,
-        model_config_id=model_cfg_id,
-        anomaly_score=anomaly_score,
-        confidence_score=confidence_score,
-        is_anomalous=bool(defects or anomaly_score >= threshold),
-        heatmap_file_path=heatmap_path,
-        processing_time_ms=processing_time_ms,
-        bounding_boxes_json=[d.model_dump() for d in defects],
-    )
+        ar_row = AnomalyResultRepository(db).create(
+            inspection_id=insp.id,
+            model_config_id=model_cfg_id,
+            anomaly_score=item["anomaly_score"],
+            confidence_score=item["confidence_score"],
+            is_anomalous=bool(item["defects"] or item["anomaly_score"] >= threshold),
+            heatmap_file_path=item["heatmap_path"],
+            processing_time_ms=item["processing_time_ms"],
+            bounding_boxes_json=[d.model_dump() for d in item["defects"]],
+        )
+        if primary_ar is None:
+            primary_ar = ar_row
+
+    ar = primary_ar
 
     top_severity = defects[0].severity if defects else (
         "Minor" if decision == "REVIEW_REQUIRED" else "Informational"
@@ -572,6 +804,9 @@ async def run_inspection(
         "anomaly_score": anomaly_score,
         "severity": top_severity,
         "defects": [d.model_dump() for d in defects],
+        "module_results": [r.model_dump() for r in module_results],
+        "weighted_outputs": [w.model_dump() for w in weighted_outputs],
+        "distinct_outputs": distinct_outputs,
         "timestamp": insp.inspected_at.isoformat(),
     }
     (reports_dir / f"INS-{insp.id}.json").write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
@@ -586,6 +821,9 @@ async def run_inspection(
         defects=defects,
         model_used=used_model_name,
         heatmap_url=heatmap_url,
+        module_results=module_results,
+        weighted_outputs=weighted_outputs,
+        distinct_outputs=distinct_outputs,
         score=int(round(quality_score * 100)),
         isMock=False,
     )

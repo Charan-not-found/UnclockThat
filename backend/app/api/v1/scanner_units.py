@@ -32,6 +32,7 @@ class ModuleIn(BaseModel):
     model_key: str
     dataset_id: Optional[int] = None
     selected_outputs: list[str] = Field(default_factory=list)
+    weight: int = Field(default=100, ge=1, le=100)
     config: Optional[dict[str, Any]] = None
 
 
@@ -47,6 +48,7 @@ class ModuleOut(BaseModel):
     dataset_name: Optional[str]
     dataset_validation_status: Optional[str]
     selected_outputs: list[str]
+    weight: int
     config: Optional[dict[str, Any]]
     state: str
     created_at: str
@@ -129,6 +131,7 @@ def _module_to_out(db: Session, m: AnalysisModule) -> ModuleOut:
         dataset_name=ds.name if ds else None,
         dataset_validation_status=ds.validation_status if ds else None,
         selected_outputs=list(m.selected_outputs_json or []),
+        weight=int((m.config_json or {}).get("weight", 100)),
         config=m.config_json,
         state=m.state,
         created_at=m.created_at.isoformat(),
@@ -322,7 +325,7 @@ def add_module(unit_id: int, body: ModuleIn, db: Session = Depends(get_db)) -> M
 
     trained_dir = BASE_DIR / "artifacts" / "trained"
     trained_dir.mkdir(parents=True, exist_ok=True)
-    ext = ".pt" if body.model_key in ("yolo11n_seg", "yolo11m_seg") else ".ckpt"
+    ext = ".pt" if body.model_key in ("yolo11n_seg", "yolo11m_seg", "omniposead", "anomalydino") else ".ckpt"
     cloned_rel = f"artifacts/trained/module_{mod.id}_{body.model_key}{ext}"
     cloned_abs = BASE_DIR / cloned_rel
 
@@ -345,6 +348,7 @@ def add_module(unit_id: int, body: ModuleIn, db: Session = Depends(get_db)) -> M
     db.flush()
 
     cfg = dict(mod.config_json or {})
+    cfg["weight"] = body.weight
     cfg["cloned_model_config_id"] = mc.id
     cfg["cloned_weights_path"] = cloned_rel if body.model_key != "opencv_heuristic" else None
     mod.config_json = cfg
@@ -371,7 +375,11 @@ def update_module(
     mod.model_key = body.model_key
     mod.dataset_id = body.dataset_id
     mod.selected_outputs_json = outputs
-    mod.config_json = body.config
+    existing_cfg = dict(mod.config_json or {})
+    if body.config:
+        existing_cfg.update(body.config)
+    existing_cfg["weight"] = body.weight
+    mod.config_json = existing_cfg
     mod.state = _compute_module_state(cap, ds)
 
     stmt = (

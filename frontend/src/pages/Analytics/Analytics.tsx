@@ -1,6 +1,5 @@
 /**
- * Analytics page — all metrics server-computed, with definitions and denominators.
- * No fabricated numbers. Empty datasets show "no data" explicitly.
+ * Analytics page — server-computed per Scanner Unit or across all units.
  */
 import { useEffect, useState } from 'react'
 import { RefreshCw, Info } from 'lucide-react'
@@ -13,9 +12,11 @@ import StatCard from '../../components/common/StatCard'
 import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import {
-  getSummary, getTrend, getSeverityDistribution, getStatusDistribution,
+  getSummary, getTrend, getSeverityDistribution, getStatusDistribution, getAnalyticsByScannerUnit,
+  type ScannerUnitStats,
 } from '../../services/analyticsService'
-import type { AnalyticsSummary, DailyPoint, SeverityCount, StatusCount } from '../../types'
+import { listScannerUnits } from '../../services/scannerUnitService'
+import type { AnalyticsSummary, DailyPoint, ScannerUnit, SeverityCount, StatusCount } from '../../types'
 
 const SEV_COLORS: Record<string, string> = {
   Critical: '#dc2626', Major: '#d97706', Minor: '#ca8a04', Informational: '#6b7280',
@@ -27,6 +28,9 @@ const STATUS_COLORS: Record<string, string> = {
 export default function Analytics() {
   const [days, setDays] = useState(30)
   const [trendDays, setTrendDays] = useState(14)
+  const [scannerId, setScannerId] = useState<string>('')
+  const [scanners, setScanners] = useState<ScannerUnit[]>([])
+  const [unitStats, setUnitStats] = useState<ScannerUnitStats[]>([])
   const [summary, setSummary] = useState<AnalyticsSummary>()
   const [trend, setTrend] = useState<DailyPoint[]>()
   const [sevDist, setSevDist] = useState<SeverityCount[]>()
@@ -34,21 +38,32 @@ export default function Analytics() {
   const [err, setErr] = useState(false)
   const [loading, setLoading] = useState(true)
 
+  const selectedUnitId = scannerId ? Number(scannerId) : undefined
+
   const load = () => {
     setErr(false)
     setLoading(true)
     Promise.all([
-      getSummary(days),
-      getTrend(trendDays),
-      getSeverityDistribution(days),
-      getStatusDistribution(days),
+      listScannerUnits(),
+      getSummary(days, selectedUnitId),
+      getTrend(trendDays, selectedUnitId),
+      getSeverityDistribution(days, selectedUnitId),
+      getStatusDistribution(days, selectedUnitId),
+      getAnalyticsByScannerUnit(days),
     ])
-      .then(([s, t, sd, std]) => { setSummary(s); setTrend(t); setSevDist(sd); setStatusDist(std) })
+      .then(([sc, s, t, sd, std, us]) => {
+        setScanners(sc)
+        setSummary(s)
+        setTrend(t)
+        setSevDist(sd)
+        setStatusDist(std)
+        setUnitStats(us)
+      })
       .catch(() => setErr(true))
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [days, trendDays])
+  useEffect(load, [days, trendDays, scannerId])
 
   if (loading) return <LoadingState message="Loading analytics…" />
   if (err) return <ErrorState message="Failed to load analytics" onRetry={load} />
@@ -57,25 +72,39 @@ export default function Analytics() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-3 page-header">
+      <div className="flex flex-wrap items-center justify-between gap-3 page-header">
         <div>
           <div className="flex items-center gap-2">
             <h1>Analytics</h1>
             <PageHelpLegend
               title="Analytics"
-              summary="Server-side aggregated quality trends and defect distributions."
+              summary="Server-side aggregated quality trends and defect distributions, filterable per Scanner Unit."
               items={[
-                { label: 'Pass Rate', description: 'PASS decisions divided by total inspections in the selected date range.' },
+                { label: 'Pass Rate', description: 'PASS decisions divided by total inspections in the selected range.' },
                 { label: 'Anomaly Rate', description: '(FAIL + Needs review) divided by total inspections in range.' },
               ]}
             />
           </div>
-          <p>All metrics computed server-side from persisted inspection records.</p>
+          <p>Server-computed metrics per Scanner Unit from persisted inspection records.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-slate-500">Date range:
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+            Scanner Unit:
             <select
-              className="ml-1 rounded border border-slate-300 px-2 py-1 text-xs"
+              className="ml-1 rounded px-2 py-1 text-xs input-field"
+              value={scannerId}
+              onChange={e => setScannerId(e.target.value)}
+            >
+              <option value="">All Scanner Units</option>
+              {scanners.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+            Date range:
+            <select
+              className="ml-1 rounded px-2 py-1 text-xs input-field"
               value={days} onChange={e => setDays(+e.target.value)}
             >
               <option value={7}>7 days</option>
@@ -88,12 +117,13 @@ export default function Analytics() {
       </div>
 
       {/* Metric definition banner */}
-      <div className="card px-4 py-3 bg-slate-50 border-slate-200">
+      <div className="card px-4 py-3 popup-subtle">
         <div className="flex items-start gap-2">
-          <Info size={15} className="text-slate-500 mt-0.5 flex-shrink-0" />
-          <p className="text-xs text-slate-500">
-            <strong>Metric definitions:</strong> Pass Rate = PASS decisions ÷ total inspections (denominator: all completed inspections in range).
-            Anomaly Rate = (FAIL + REVIEW_REQUIRED) ÷ total. All counts from <code className="bg-slate-100 px-1 rounded">inspection_records</code> and <code className="bg-slate-100 px-1 rounded">severity_scores</code> tables.
+          <Info size={15} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--color-text-secondary)' }} />
+          <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+            <strong>Metric definitions:</strong> Pass Rate = PASS decisions ÷ total inspections.
+            Anomaly Rate = (FAIL + REVIEW_REQUIRED) ÷ total.
+            {selectedUnitId != null && <> Filtered to Scanner Unit ID <strong>{selectedUnitId}</strong>.</>}
           </p>
         </div>
       </div>
@@ -116,24 +146,70 @@ export default function Analytics() {
         <StatCard label={`Needs Review (${days}d)`} value={summary?.review_count ?? 0} accent="amber" />
       </div>
 
+      {/* Per-Scanner Unit Breakdown Table */}
+      <section className="card">
+        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
+          <h2 className="font-medium text-sm">Breakdown by Scanner Unit ({days}d)</h2>
+        </div>
+        {unitStats.length === 0 ? (
+          <EmptyState title="No Scanner Unit inspection data yet" body="Run Test Sample with a Scanner Unit to populate per-unit analytics." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Scanner Unit</th><th className="tabular-nums">Total</th>
+                  <th className="tabular-nums">Passed</th><th className="tabular-nums">Failed</th>
+                  <th className="tabular-nums">Needs Review</th><th className="tabular-nums">Pass Rate</th>
+                  <th className="tabular-nums">Anomaly Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unitStats.map(u => (
+                  <tr key={u.scanner_unit_id ?? 'unassigned'}>
+                    <td className="font-medium">
+                      {u.scanner_unit_id != null ? (
+                        <button
+                          type="button"
+                          onClick={() => setScannerId(String(u.scanner_unit_id))}
+                          className="text-blue-500 hover:underline text-left"
+                        >
+                          {u.scanner_unit_name}
+                        </button>
+                      ) : u.scanner_unit_name}
+                    </td>
+                    <td className="tabular-nums">{u.total_inspections}</td>
+                    <td className="tabular-nums text-green-600">{u.pass_count}</td>
+                    <td className="tabular-nums text-red-600">{u.fail_count}</td>
+                    <td className="tabular-nums text-amber-600">{u.review_count}</td>
+                    <td className="tabular-nums">{u.pass_rate_pct != null ? `${u.pass_rate_pct}%` : '—'}</td>
+                    <td className="tabular-nums">{u.anomaly_rate_pct != null ? `${u.anomaly_rate_pct}%` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {!hasData ? (
         <div className="card">
           <EmptyState
-            title="No inspection data in selected range"
-            body="Run inspections to populate analytics. Empty datasets do not produce rates or percentages."
+            title="No inspection data in selected scope"
+            body="Run sample tests to populate trend and distribution charts."
           />
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
-          {/* Trend */}
           <section className="card p-4 lg:col-span-2">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
               <div>
                 <h2 className="font-medium text-sm">Daily trend</h2>
-                <p className="text-xs text-slate-400">Source: inspection_records.inspected_at grouped by day.</p>
+                <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>Source: inspection_records.inspected_at grouped by day.</p>
               </div>
-              <label className="text-xs text-slate-500">Days:
-                <select className="ml-1 rounded border border-slate-300 px-2 py-1 text-xs"
+              <label className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                Days:
+                <select className="ml-1 rounded px-2 py-1 text-xs input-field"
                   value={trendDays} onChange={e => setTrendDays(+e.target.value)}>
                   <option value={7}>7</option>
                   <option value={14}>14</option>
@@ -156,10 +232,9 @@ export default function Analytics() {
             </div>
           </section>
 
-          {/* Severity distribution */}
           <section className="card p-4">
             <h2 className="font-medium text-sm mb-1">Severity distribution</h2>
-            <p className="text-xs text-slate-400 mb-3">From severity_scores table · {days}d · count per label.</p>
+            <p className="text-xs mb-3" style={{ color: 'var(--color-text-secondary)' }}>From severity_scores · {days}d.</p>
             {sevDist && sevDist.length > 0 ? (
               <div className="h-48">
                 <ResponsiveContainer>
@@ -180,10 +255,9 @@ export default function Analytics() {
             )}
           </section>
 
-          {/* Status distribution */}
           <section className="card p-4">
             <h2 className="font-medium text-sm mb-1">Decision distribution</h2>
-            <p className="text-xs text-slate-400 mb-3">From inspection_records.overall_decision · {days}d.</p>
+            <p className="text-xs mb-3" style={{ color: 'var(--color-text-secondary)' }}>From inspection_records.overall_decision · {days}d.</p>
             {statusDist && statusDist.length > 0 ? (
               <div className="h-48">
                 <ResponsiveContainer>

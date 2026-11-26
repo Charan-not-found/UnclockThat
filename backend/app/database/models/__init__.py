@@ -8,6 +8,7 @@ from backend.app.database.models.scanner import (
     AnalysisModule,
     CorrectionRecord,
     DatasetRecord,
+    ModelToggleSetting,
     ScannerUnit,
     TrainingRun,
 )
@@ -25,4 +26,5 @@ __all__ = [
     "DatasetRecord",
     "TrainingRun",
     "CorrectionRecord",
+    "ModelToggleSetting",
 ]

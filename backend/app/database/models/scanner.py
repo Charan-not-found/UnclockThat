@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.database.base import Base
@@ -136,3 +136,15 @@ class CorrectionRecord(Base):
     saved_image_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     review_status: Mapped[str] = mapped_column(String(64), default="Reviewed", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class ModelToggleSetting(Base):
+    """Application-wide enable/disable toggle for each AI model in the catalogue."""
+
+    __tablename__ = "model_toggle_settings"
+
+    model_key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )

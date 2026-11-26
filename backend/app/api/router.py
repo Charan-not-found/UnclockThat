@@ -13,6 +13,7 @@ from backend.app.api.v1 import (
     models,
     pipelines,
     scanner_units,
+    settings,
     training,
 )
 
@@ -25,4 +26,5 @@ api_router.include_router(inspections.router)
 api_router.include_router(models.router)
 api_router.include_router(pipelines.router)
 api_router.include_router(analytics.router)
+api_router.include_router(settings.router)
 api_router.include_router(admin.router)

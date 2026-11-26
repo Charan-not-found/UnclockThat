@@ -11,8 +11,27 @@ def _file_exists(rel_path: str) -> bool:
     return bool(rel_path) and (BASE_DIR / rel_path).is_file()
 
 
+def _get_disabled_model_keys() -> set[str]:
+    """Read disabled model_key toggles from SQLite without failing if DB isn't initialized."""
+    try:
+        from sqlalchemy import select
+        from backend.app.database.connection import SessionLocal
+        from backend.app.database.models.scanner import ModelToggleSetting
+
+        db = SessionLocal()
+        try:
+            rows = db.scalars(
+                select(ModelToggleSetting).where(ModelToggleSetting.is_enabled.is_(False))
+            ).all()
+            return {r.model_key for r in rows}
+        finally:
+            db.close()
+    except Exception:
+        return set()
+
+
 def get_model_catalogue() -> list[dict[str, Any]]:
-    """Return capability manifests for all integrated AI models with live artifact checks."""
+    """Return capability manifests for all integrated AI models with live artifact & toggle checks."""
     efficientad_ckpt = "artifacts/trained/efficientad_casting.ckpt"
     efficientad_teacher_s = "artifacts/pretrained/pretrained_teacher_small.pth"
     efficientad_teacher_m = "artifacts/pretrained/pretrained_teacher_medium.pth"
@@ -20,13 +39,14 @@ def get_model_catalogue() -> list[dict[str, Any]]:
     yolo_m_weights = "artifacts/pretrained/yolo11m-seg.pt"
 
     trained_efficientad = _file_exists(efficientad_ckpt)
+    disabled_keys = _get_disabled_model_keys()
 
-    return [
+    items = [
         {
             "model_key": "patchcore",
             "display_name": "PatchCore (WideResNet-50)",
             "model_family": "patchcore",
-            "task": "High-accuracy normal-only anomaly detection (memory bank)",
+            "task": "Medium Speed · High-accuracy normal-only surface & structural anomaly detection (WideResNet-50 coreset memory bank)",
             "integration_state": "available_integrated",
             "training_paradigm": "normal_only",
             "requires_dataset": True,
@@ -48,7 +68,7 @@ def get_model_catalogue() -> list[dict[str, Any]]:
             "model_key": "dinomaly",
             "display_name": "Dinomaly (DINOv2 ViT-B/14)",
             "model_family": "dinomaly",
-            "task": "Vision Transformer normal-only anomaly detection",
+            "task": "Low Speed · High-precision Vision Transformer normal-only anomaly detection & fine defect localization",
             "integration_state": "available_integrated",
             "training_paradigm": "normal_only",
             "requires_dataset": True,
@@ -70,7 +90,7 @@ def get_model_catalogue() -> list[dict[str, Any]]:
             "model_key": "efficientad_medium",
             "display_name": "EfficientAD-Medium",
             "model_family": "efficientad",
-            "task": "Higher-capacity normal-only anomaly detection",
+            "task": "Medium-High Speed · Balanced normal-only surface anomaly detection & pixel localization",
             "integration_state": "available_integrated",
             "training_paradigm": "normal_only",
             "requires_dataset": True,
@@ -92,7 +112,7 @@ def get_model_catalogue() -> list[dict[str, Any]]:
             "model_key": "efficientad_small",
             "display_name": "EfficientAD-Small",
             "model_family": "efficientad",
-            "task": "Fast normal-only anomaly detection & localization",
+            "task": "High Speed · Real-time normal-only surface anomaly detection & heatmap localization",
             "integration_state": "available_integrated",
             "training_paradigm": "normal_only",
             "requires_dataset": True,
@@ -114,7 +134,7 @@ def get_model_catalogue() -> list[dict[str, Any]]:
             "model_key": "yolo11m_seg",
             "display_name": "YOLO11m-Seg (Medium)",
             "model_family": "yolo_seg",
-            "task": "High-accuracy object & defect detection + segmentation",
+            "task": "Medium Speed · High-accuracy supervised object/defect bounding-box detection & instance segmentation",
             "integration_state": "available_integrated",
             "training_paradigm": "supervised_masks",
             "requires_dataset": False,
@@ -136,7 +156,7 @@ def get_model_catalogue() -> list[dict[str, Any]]:
             "model_key": "yolo11n_seg",
             "display_name": "YOLO11n-Seg (Nano)",
             "model_family": "yolo_seg",
-            "task": "Lightweight object & defect detection + segmentation",
+            "task": "High Speed · Real-time lightweight supervised object/defect detection & segmentation masks",
             "integration_state": "available_integrated",
             "training_paradigm": "supervised_masks",
             "requires_dataset": False,
@@ -158,7 +178,7 @@ def get_model_catalogue() -> list[dict[str, Any]]:
             "model_key": "opencv_heuristic",
             "display_name": "OpenCV Contrast Heuristic",
             "model_family": "opencv_heuristic",
-            "task": "Deterministic surface contrast anomaly signal",
+            "task": "Ultra-High Speed · Deterministic contrast-deviation & edge irregularity detection (non-AI fallback)",
             "integration_state": "available_integrated",
             "training_paradigm": "heuristic_no_training",
             "requires_dataset": False,
@@ -174,7 +194,58 @@ def get_model_catalogue() -> list[dict[str, Any]]:
             "trained_checkpoint_path": None,
             "ready_for_inference": True,
         },
+        {
+            "model_key": "omniposead",
+            "display_name": "OmniPoseAD (Pose-Agnostic 3D)",
+            "model_family": "omniposead",
+            "task": "Low Speed · Pose-agnostic multi-view anomaly detection (DINOv2 viewpoint retrieval + homography alignment)",
+            "integration_state": "available_integrated",
+            "training_paradigm": "multi_view_pose_agnostic",
+            "requires_dataset": True,
+            "dataset_requirements": "Normal images across viewpoints. Builds a pose-aligned DINOv2 reference bank.",
+            "supported_training_strategies": ["initial_training", "full_retraining"],
+            "supported_outputs": [
+                {"key": "anomaly_score", "label": "Anomaly score", "description": "Pose-aligned image-level anomaly score."},
+                {"key": "heatmap", "label": "Pixel difference map", "description": "View-aligned patch-cosine anomaly heatmap."},
+                {"key": "bounding_boxes", "label": "Anomaly bounding boxes", "description": "Thresholded pose-aligned anomaly contours."},
+                {"key": "confidence_score", "label": "Viewpoint confidence", "description": "Nearest-viewpoint similarity confidence."},
+            ],
+            "limitations": "Requires training on normal reference viewpoints; slower than single-view models due to viewpoint alignment.",
+            "pretrained_path": None,
+            "pretrained_present": True,
+            "trained_checkpoint_path": None,
+            "ready_for_inference": False,
+        },
+        {
+            "model_key": "anomalydino",
+            "display_name": "AnomalyDINO (DINOv2 Few-Shot)",
+            "model_family": "anomalydino",
+            "task": "High Speed (Inference) · Few-shot & training-free DINOv2 patch-NN anomaly detection (PCA patch masking + cosine distance + mean top-1% aggregation)",
+            "integration_state": "available_integrated",
+            "training_paradigm": "few_shot_patch_nn",
+            "requires_dataset": True,
+            "dataset_requirements": "Few-shot or full normal (defect-free) images. Automatically augments <=16 images and builds a PCA-masked DINOv2 patch memory bank.",
+            "supported_training_strategies": ["initial_training", "full_retraining"],
+            "supported_outputs": [
+                {"key": "anomaly_score", "label": "Anomaly score", "description": "Mean top-1% cosine-NN tail anomaly score (0.0–1.0)."},
+                {"key": "heatmap", "label": "Anomaly heatmap", "description": "PCA-masked DINOv2 patch distance overlay."},
+                {"key": "bounding_boxes", "label": "Anomaly bounding boxes", "description": "Thresholded anomaly contours."},
+                {"key": "confidence_score", "label": "Model confidence", "description": "Patch-distance separation confidence."},
+            ],
+            "limitations": "Custom WACV 2025 implementation using frozen DINOv2 ViT-B/14; requires building the normal memory bank on your dataset first.",
+            "pretrained_path": None,
+            "pretrained_present": True,
+            "trained_checkpoint_path": None,
+            "ready_for_inference": False,
+        },
     ]
+
+    for item in items:
+        enabled = item["model_key"] not in disabled_keys
+        item["is_enabled"] = enabled
+        if not enabled:
+            item["integration_state"] = "disabled_by_admin"
+    return items
 
 
 def get_model_capability(model_key: str) -> dict[str, Any] | None:

@@ -15,6 +15,7 @@ export interface ModulePayload {
   model_key: string
   dataset_id?: number | null
   selected_outputs: string[]
+  weight?: number
 }
 
 export async function getModelCatalogue(): Promise<ModelCapability[]> {

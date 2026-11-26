@@ -85,8 +85,51 @@ export interface InspectionRunResult {
   defects: Defect[]
   model_used?: string
   heatmap_url?: string | null
+  module_results?: ModuleScanResult[]
+  weighted_outputs?: WeightedOutput[]
+  distinct_outputs?: {
+    defect_classes?: string[]
+    heatmaps?: Array<{ module_id: number; module_name: string; heatmap_url: string }>
+    bounding_boxes_count?: number
+    unique_module_outputs?: Array<{
+      module_id: number
+      module_name: string
+      output_key: string
+      summary: string
+      shared: boolean
+    }>
+  }
   score: number
   isMock: boolean
+}
+
+export interface ModuleScanResult {
+  module_id: number
+  module_name: string
+  model_key: string
+  model_display_name: string
+  weight: number
+  weight_ratio: number
+  selected_outputs: string[]
+  anomaly_score: number
+  confidence_score: number
+  defects: Defect[]
+  defect_classes: string[]
+  heatmap_url?: string | null
+  processing_time_ms?: number | null
+}
+
+export interface WeightedOutput {
+  output_key: string
+  label: string
+  weighted_value: number
+  weights_used: Array<{
+    module_id: number
+    module_name: string
+    weight: number
+    ratio: number
+    value: number
+  }>
 }
 
 export interface CorrectionRecord {
@@ -112,7 +155,8 @@ export interface ModelCapability {
   display_name: string
   model_family: string
   task: string
-  integration_state: 'available_integrated' | 'downloaded_not_integrated' | 'planned_unavailable'
+  integration_state: 'available_integrated' | 'downloaded_not_integrated' | 'planned_unavailable' | 'disabled_by_admin'
+  is_enabled?: boolean
   training_paradigm: string
   requires_dataset: boolean
   dataset_requirements: string
@@ -137,6 +181,7 @@ export interface AnalysisModule {
   dataset_name?: string | null
   dataset_validation_status?: string | null
   selected_outputs: string[]
+  weight?: number
   config?: Record<string, unknown> | null
   state: string
   created_at: string

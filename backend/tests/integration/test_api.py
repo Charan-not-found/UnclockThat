@@ -32,6 +32,7 @@ def test_fastapi_app_routes_registered():
         "/api/v1/model-catalogue",
         "/api/v1/datasets",
         "/api/v1/training-jobs",
+        "/api/v1/settings/models",
         "/api/v1/inspections",
         "/api/v1/inspections/corrections",
         "/api/v1/models",
@@ -203,10 +204,16 @@ def test_scanner_unit_and_module_crud():
         delete_scanner_unit,
         list_model_catalogue,
     )
+    from backend.app.database.models.scanner import ModelToggleSetting
     catalogue = list_model_catalogue()
     assert any(c["model_key"] == "efficientad_small" for c in catalogue)
 
     db = SessionLocal()
+    prev_toggle = db.get(ModelToggleSetting, "opencv_heuristic")
+    prev_enabled = prev_toggle.is_enabled if prev_toggle else True
+    if prev_toggle:
+        prev_toggle.is_enabled = True
+        db.commit()
     try:
         unit = create_scanner_unit(
             ScannerUnitIn(name="Test Casting Scanner", industry="Automotive", product_name="Brake disc"),
@@ -229,6 +236,9 @@ def test_scanner_unit_and_module_crud():
         res = delete_scanner_unit(unit.id, db=db)
         assert res["status"] == "deleted"
     finally:
+        if prev_toggle:
+            prev_toggle.is_enabled = prev_enabled
+            db.commit()
         db.close()
 
 
@@ -236,13 +246,22 @@ def test_training_rejects_missing_or_empty_dataset():
     """Verify training fails with a clear 'Training issue' when dataset is missing or empty."""
     from fastapi import HTTPException
     from backend.app.api.v1.training import TrainingJobIn, start_training_job
+    from backend.app.database.models.scanner import ModelToggleSetting
     db = SessionLocal()
+    prev_toggle = db.get(ModelToggleSetting, "efficientad_small")
+    prev_enabled = prev_toggle.is_enabled if prev_toggle else True
+    if prev_toggle:
+        prev_toggle.is_enabled = True
+        db.commit()
     try:
         with pytest.raises(HTTPException) as exc:
             start_training_job(TrainingJobIn(model_key="efficientad_small", dataset_id=None), db=db)
         assert exc.value.status_code == 422
         assert "Training issue" in exc.value.detail
     finally:
+        if prev_toggle:
+            prev_toggle.is_enabled = prev_enabled
+            db.commit()
         db.close()
 
 
@@ -304,3 +323,187 @@ def test_zip_validator_and_480p_resizing(tmp_path):
     saved = cv2.imread(str(out_good / "1.jpg"))
     assert saved is not None
     assert saved.shape[:2] == (480, 640)
+
+
+def test_settings_model_toggle_persists():
+    """Verify global AI model toggle in Settings persists and restores original state."""
+    from backend.app.api.v1.settings import list_model_toggles, toggle_model_setting
+    db = SessionLocal()
+    try:
+        items = list_model_toggles()
+        target = next((i for i in items if i.model_key == "patchcore"), None)
+        assert target is not None
+        before = target.is_enabled
+
+        res1 = toggle_model_setting("patchcore", db=db)
+        assert res1.is_enabled is (not before)
+
+        # Toggle back to restore original state
+        res2 = toggle_model_setting("patchcore", db=db)
+        assert res2.is_enabled is before
+    finally:
+        db.close()
+
+
+def test_multi_module_weighted_inspection():
+    """Verify multi-module Scanner Unit runs all Ready modules, computes weighted averages, and keeps distinct outputs."""
+    import json
+    import cv2
+    import numpy as np
+    from backend.app.api.v1.inspections import run_inspection
+    from backend.app.api.v1.scanner_units import (
+        ModuleIn,
+        ScannerUnitIn,
+        add_module,
+        create_scanner_unit,
+        delete_scanner_unit,
+    )
+    from backend.app.database.models.scanner import ModelToggleSetting
+
+    db = SessionLocal()
+    prev_toggle = db.get(ModelToggleSetting, "opencv_heuristic")
+    prev_enabled = prev_toggle.is_enabled if prev_toggle else True
+    if prev_toggle:
+        prev_toggle.is_enabled = True
+        db.commit()
+
+    unit_id = None
+    try:
+        unit = create_scanner_unit(
+            ScannerUnitIn(name="Multi-Mod Test Unit", industry="Automotive", product_name="Rotor"),
+            db=db,
+        )
+        unit_id = unit.id
+        mod1 = add_module(
+            unit_id,
+            ModuleIn(
+                name="Mod A",
+                model_key="opencv_heuristic",
+                selected_outputs=["anomaly_score", "bounding_boxes"],
+                weight=80,
+            ),
+            db=db,
+        )
+        mod2 = add_module(
+            unit_id,
+            ModuleIn(
+                name="Mod B",
+                model_key="opencv_heuristic",
+                selected_outputs=["anomaly_score"],
+                weight=20,
+            ),
+            db=db,
+        )
+        assert mod1.weight == 80
+        assert mod2.weight == 20
+
+        img = np.zeros((120, 160, 3), dtype=np.uint8)
+        _, png_bytes = cv2.imencode(".png", img)
+
+        class _DummyUpload:
+            async def read(self):
+                return png_bytes.tobytes()
+
+        coro = run_inspection(
+            industry="Automotive",
+            product="Rotor",
+            pipelineId="Multi-Mod Test Unit",
+            scannerUnitId=unit_id,
+            threshold=0.5,
+            fileName="test.png",
+            moduleWeights=json.dumps({str(mod1.id): 60, str(mod2.id): 40}),
+            file=_DummyUpload(),
+            db=db,
+        )
+        try:
+            coro.send(None)
+            raise AssertionError("Expected run_inspection coroutine to complete synchronously")
+        except StopIteration as stop:
+            res = stop.value
+
+        assert len(res.module_results) == 2
+        ratios = {r.module_id: r.weight_ratio for r in res.module_results}
+        assert abs(ratios[mod1.id] - 0.6) < 1e-3
+        assert abs(ratios[mod2.id] - 0.4) < 1e-3
+        assert len(res.weighted_outputs) == 2
+        assert "unique_module_outputs" in res.distinct_outputs
+        distinct_keys = [u["output_key"] for u in res.distinct_outputs["unique_module_outputs"]]
+        assert "bounding_boxes" in distinct_keys
+    finally:
+        if unit_id is not None:
+            delete_scanner_unit(unit_id, db=db)
+        if prev_toggle:
+            prev_toggle.is_enabled = prev_enabled
+            db.commit()
+        db.close()
+
+
+def test_anomalydino_catalogue_and_pipeline(tmp_path, monkeypatch):
+    """Verify AnomalyDINO is in the catalogue and its PCA-masked cosine-NN + top-1% pipeline works end-to-end."""
+    import cv2
+    import numpy as np
+    from backend.app.models.catalogue import get_model_capability
+    from backend.app.models.anomalydino_adapter import AnomalyDINOAdapter
+
+    cap = get_model_capability("anomalydino")
+    assert cap is not None
+    assert cap["display_name"] == "AnomalyDINO (DINOv2 Few-Shot)"
+    assert cap["training_paradigm"] == "few_shot_patch_nn"
+
+    # Deterministic synthetic 37x37x16 L2-normalized patch embeddings (object center vs background border)
+    def fake_extract(bgr):
+        patches = np.zeros((37, 37, 16), dtype=np.float32)
+        patches[:, :, 0] = 1.0  # background direction
+        patches[10:27, 10:27, 0] = 0.0
+        patches[10:27, 10:27, 1] = 1.0  # foreground direction
+        if int(bgr.mean()) > 100:
+            # Anomalous bright patch in center
+            patches[16:20, 16:20, 1] = 0.0
+            patches[16:20, 16:20, 2] = 1.0
+        return patches.reshape(-1, 16)
+
+    monkeypatch.setattr(AnomalyDINOAdapter, "_extract_patches", staticmethod(fake_extract))
+
+    ds_dir = tmp_path / "normal_ds"
+    ds_dir.mkdir()
+    normal_img = np.zeros((64, 64, 3), dtype=np.uint8)
+    cv2.imwrite(str(ds_dir / "ok_1.png"), normal_img)
+
+    bank_path = tmp_path / "anomalydino_bank.pt"
+    metrics = AnomalyDINOAdapter.fit_dataset(ds_dir, bank_path)
+    assert metrics["few_shot_augmented"] is True
+    assert metrics["pca_masking_enabled"] is True
+    assert bank_path.is_file()
+
+    _, ok_bytes = cv2.imencode(".png", normal_img)
+    ok_res = AnomalyDINOAdapter.predict_bytes(ok_bytes.tobytes(), bank_path, threshold=0.5)
+    assert ok_res["anomaly_score"] == 0.0
+    assert ok_res["defects"] == []
+
+    anom_img = np.full((64, 64, 3), 200, dtype=np.uint8)
+    _, anom_bytes = cv2.imencode(".png", anom_img)
+    anom_res = AnomalyDINOAdapter.predict_bytes(anom_bytes.tobytes(), bank_path, threshold=0.5)
+    assert anom_res["anomaly_score"] > ok_res["anomaly_score"]
+    assert anom_res["model_name"] == "AnomalyDINO (DINOv2 Few-Shot)"
+
+
+def test_inspection_requires_scanner_unit():
+    """Verify scan is rejected with 422 when no Scanner Unit is selected."""
+    from fastapi import HTTPException
+    from backend.app.api.v1.inspections import run_inspection
+
+    db = SessionLocal()
+    try:
+        coro = run_inspection(
+            scannerUnitId=None,
+            fileName="test.png",
+            moduleWeights=None,
+            file=None,
+            db=db,
+        )
+        with pytest.raises(HTTPException) as exc:
+            coro.send(None)
+        assert exc.value.status_code == 422
+        assert "Scanner Unit" in exc.value.detail
+    finally:
+        db.close()

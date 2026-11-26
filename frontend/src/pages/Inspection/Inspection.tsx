@@ -30,6 +30,7 @@ export default function Inspection() {
   const [searchParams] = useSearchParams()
   const [scanners, setScanners] = useState<ScannerUnit[]>([])
   const [scannerId, setScannerId] = useState<string>(searchParams.get('scannerId') ?? '')
+  const [moduleWeights, setModuleWeights] = useState<Record<number, number>>({})
   const [threshold, setThreshold] = useState(0.5)
   const [file, setFile] = useState<File>()
   const [previewUrl, setPreviewUrl] = useState<string>()
@@ -48,6 +49,23 @@ export default function Inspection() {
     listScannerUnits().then(setScanners).catch(() => {})
   }, [])
 
+  const selectedUnit = scanners.find(u => String(u.id) === scannerId)
+  const readyModules = (selectedUnit?.modules ?? []).filter(m => m.state === 'Ready')
+
+  useEffect(() => {
+    if (!selectedUnit) {
+      setModuleWeights({})
+      return
+    }
+    const next: Record<number, number> = {}
+    for (const m of selectedUnit.modules) {
+      if (m.state === 'Ready') {
+        next[m.id] = Math.max(1, Math.min(100, m.weight ?? 100))
+      }
+    }
+    setModuleWeights(next)
+  }, [scannerId, scanners])
+
   const pickFile = (f?: File) => {
     if (!f) return
     if (urlRef.current) URL.revokeObjectURL(urlRef.current)
@@ -61,12 +79,11 @@ export default function Inspection() {
   }
 
   const run = async () => {
-    if (!file) return
+    if (!file || !scannerId) return
     setBusy(true)
     setErr(undefined)
     setResult(undefined)
     try {
-      const selectedUnit = scanners.find(u => String(u.id) === scannerId)
       const res = await runInspection(
         {
           industry: selectedUnit?.industry || 'General',
@@ -75,6 +92,7 @@ export default function Inspection() {
           scannerUnitId: scannerId ? Number(scannerId) : null,
           threshold,
           fileName: file.name,
+          moduleWeights: readyModules.length > 0 ? moduleWeights : undefined,
         },
         file,
       )
@@ -126,7 +144,7 @@ export default function Inspection() {
         <div className="flex items-start gap-2">
           <AlertCircle size={16} className="text-blue-500 mt-0.5 flex-shrink-0" />
           <p className="text-xs text-blue-400">
-            <strong>Inference engine:</strong> Uses the selected Scanner Unit&apos;s module (or trained <em>EfficientAD-Small</em> when available), falling back to OpenCV contrast heuristic if no trained checkpoint exists.
+            <strong>Inference engine:</strong> Select a Scanner Unit to run all of its Ready modules and compute weighted-average &amp; distinct outputs.
           </p>
         </div>
       </div>
@@ -136,18 +154,74 @@ export default function Inspection() {
           <div>
             <label className="block text-sm font-medium">Scanner Unit
               <select className={FIELD} value={scannerId} onChange={e => setScannerId(e.target.value)}>
-                <option value="">Default active model</option>
+                <option value="">Select a Scanner Unit...</option>
                 {scanners.map(s => (
                   <option key={s.id} value={s.id}>{s.name} ({s.status})</option>
                 ))}
               </select>
             </label>
+            {!scannerId && scanners.length > 0 && (
+              <p className="text-xs mt-1 text-amber-400">
+                Select a Scanner Unit to enable scanning.
+              </p>
+            )}
             {scanners.length === 0 && (
               <p className="text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>
                 No Scanner Units created yet. <Link to="/scanners" className="text-blue-500 hover:underline">Create one →</Link>
               </p>
             )}
           </div>
+
+          {readyModules.length > 0 && (
+            <div className="rounded-md border p-3 space-y-2.5 popup-subtle" style={{ borderColor: 'var(--color-border)' }}>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
+                  Module Weights (max 100)
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                  {readyModules.length} ready
+                </span>
+              </div>
+              {(() => {
+                const totalW = readyModules.reduce((acc, m) => acc + (moduleWeights[m.id] ?? m.weight ?? 100), 0) || 1
+                return readyModules.map(m => {
+                  const w = moduleWeights[m.id] ?? m.weight ?? 100
+                  const pct = Math.round((w / totalW) * 100)
+                  return (
+                    <div key={m.id} className="space-y-1 border-t pt-2 first:border-t-0 first:pt-0" style={{ borderColor: 'var(--color-border)' }}>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-medium truncate max-w-[145px]" title={m.name}>{m.name}</span>
+                        <span className="tabular-nums text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                          {w}/100 ({pct}%)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min={1}
+                          max={100}
+                          value={w}
+                          onChange={e => setModuleWeights(prev => ({ ...prev, [m.id]: Number(e.target.value) }))}
+                          className="flex-1 accent-blue-600"
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={w}
+                          onChange={e => {
+                            const val = Math.max(1, Math.min(100, Number(e.target.value) || 1))
+                            setModuleWeights(prev => ({ ...prev, [m.id]: val }))
+                          }}
+                          className="w-14 px-1.5 py-0.5 text-xs text-center input-field"
+                        />
+                      </div>
+                    </div>
+                  )
+                })
+              })()}
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium">
               Anomaly threshold: <span className="font-mono">{threshold.toFixed(2)}</span>
@@ -169,7 +243,7 @@ export default function Inspection() {
             <input type="file" accept="image/*" className="sr-only" onChange={e => pickFile(e.target.files?.[0])} />
           </label>
 
-          <Button className="w-full justify-center" disabled={!file || busy} loading={busy} onClick={run}>
+          <Button className="w-full justify-center" disabled={!file || !scannerId || busy} loading={busy} onClick={run}>
             <Play size={15} />
             {busy ? 'Testing…' : 'Run test sample'}
           </Button>
@@ -238,6 +312,128 @@ export default function Inspection() {
                       </Link>
                     )}
                   </div>
+
+                  {result.weighted_outputs && result.weighted_outputs.length > 0 && (
+                    <div className="rounded-md border p-3 space-y-2 popup-subtle" style={{ borderColor: 'var(--color-border)' }}>
+                      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
+                        Weighted Average Outputs (Shared)
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {result.weighted_outputs.map(wo => (
+                          <div key={wo.output_key} className="rounded border p-2.5" style={{ borderColor: 'var(--color-border)' }}>
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-medium">{wo.label}</span>
+                              <span className="text-base font-semibold tabular-nums">{wo.weighted_value.toFixed(3)}</span>
+                            </div>
+                            <div className="mt-1.5 space-y-0.5">
+                              {wo.weights_used.map(wu => (
+                                <div key={wu.module_id} className="flex items-center justify-between text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                                  <span className="truncate max-w-[140px]">{wu.module_name}</span>
+                                  <span className="tabular-nums">
+                                    val {wu.value.toFixed(3)} × {(wu.ratio * 100).toFixed(0)}% (w:{wu.weight})
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {result.distinct_outputs && (
+                    (result.distinct_outputs.unique_module_outputs?.length ?? 0) > 0 ||
+                    (result.distinct_outputs.defect_classes?.length ?? 0) > 0
+                  ) && (
+                    <div className="rounded-md border p-3 space-y-2 popup-subtle" style={{ borderColor: 'var(--color-border)' }}>
+                      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
+                        Distinct &amp; Per-Module Outputs (As-Is)
+                      </div>
+                      {(result.distinct_outputs.defect_classes?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                          <span style={{ color: 'var(--color-text-secondary)' }}>Detected classes:</span>
+                          {result.distinct_outputs.defect_classes!.map(cls => (
+                            <span key={cls} className="rounded bg-amber-500/15 text-amber-400 px-2 py-0.5 font-medium">{cls}</span>
+                          ))}
+                        </div>
+                      )}
+                      {(result.distinct_outputs.unique_module_outputs?.length ?? 0) > 0 && (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {result.distinct_outputs.unique_module_outputs!.map((uo, idx) => (
+                            <div key={`${uo.module_id}-${uo.output_key}-${idx}`} className="flex items-center justify-between rounded border px-2.5 py-1.5 text-xs" style={{ borderColor: 'var(--color-border)' }}>
+                              <div>
+                                <span className="font-medium">{uo.module_name}</span>
+                                <span className="ml-1.5 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>({uo.output_key})</span>
+                              </div>
+                              <span className="font-medium">{uo.summary}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {result.module_results && result.module_results.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
+                        Individual Module Results ({result.module_results.length})
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {result.module_results.map(mr => (
+                          <div key={mr.module_id} className="rounded-md border p-3 space-y-2 popup-subtle" style={{ borderColor: 'var(--color-border)' }}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="text-sm font-semibold">{mr.module_name}</div>
+                                <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                                  {mr.model_display_name}
+                                </div>
+                              </div>
+                              <span className="rounded px-2 py-0.5 text-[11px] font-medium bg-blue-500/15 text-blue-400 tabular-nums">
+                                Weight {mr.weight}/100 ({Math.round(mr.weight_ratio * 100)}%)
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-xs">
+                              <div>
+                                <div style={{ color: 'var(--color-text-secondary)' }}>Anomaly</div>
+                                <div className="font-semibold tabular-nums">{mr.anomaly_score.toFixed(3)}</div>
+                              </div>
+                              <div>
+                                <div style={{ color: 'var(--color-text-secondary)' }}>Confidence</div>
+                                <div className="font-semibold tabular-nums">{Math.round(mr.confidence_score * 100)}%</div>
+                              </div>
+                              <div>
+                                <div style={{ color: 'var(--color-text-secondary)' }}>Latency</div>
+                                <div className="font-semibold tabular-nums">
+                                  {mr.processing_time_ms != null ? `${Math.round(mr.processing_time_ms)} ms` : '—'}
+                                </div>
+                              </div>
+                            </div>
+                            {mr.heatmap_url && (
+                              <img
+                                src={`${apiRoot}${mr.heatmap_url}`}
+                                alt={`${mr.module_name} overlay`}
+                                className="aspect-video w-full rounded object-contain bg-black/20"
+                              />
+                            )}
+                            {mr.defects.length > 0 ? (
+                              <div className="text-xs space-y-1">
+                                {mr.defects.map((d, idx) => (
+                                  <div key={idx} className="flex items-center justify-between">
+                                    <span>{d.type}</span>
+                                    <StatusBadge value={d.severity} />
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                                No defects flagged by this module.
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {result.defects.length > 0 ? (
                     <table>

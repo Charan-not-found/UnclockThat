@@ -8,5 +8,6 @@ from backend.app.api.v1 import (
     models,
     pipelines,
     scanner_units,
+    settings,
     training,
 )

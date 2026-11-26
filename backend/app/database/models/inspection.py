@@ -36,6 +36,9 @@ class InspectionRecord(Base):
     pipeline_config_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("pipeline_configs.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    scanner_unit_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("scanner_units.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     product_serial: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     station_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     image_file_path: Mapped[str] = mapped_column(String(512), nullable=False)
