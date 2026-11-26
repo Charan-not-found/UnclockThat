@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import threading
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -23,6 +24,73 @@ from backend.app.models.catalogue import get_model_capability
 router = APIRouter(prefix="/training-jobs", tags=["training"])
 
 _train_lock = threading.Lock()
+_queue_lock = threading.Lock()
+_train_queue: deque[tuple[str, Any]] = deque()
+_queue_worker_active = False
+_cancelled_jobs: set[int] = set()
+
+
+class _TrainingCancelledError(Exception):
+    """Raised inside a running training job when cancelled by user."""
+
+
+def _check_cancelled(job_id: int) -> None:
+    with _queue_lock:
+        if job_id in _cancelled_jobs:
+            raise _TrainingCancelledError("Training cancelled by user.")
+
+
+def _is_job_cancelled(job_id: int) -> bool:
+    db = SessionLocal()
+    try:
+        r = db.get(TrainingRun, job_id)
+        return r is None or r.status == "Cancelled"
+    finally:
+        with _queue_lock:
+            _cancelled_jobs.discard(job_id)
+        db.close()
+
+
+def _training_queue_worker() -> None:
+    global _queue_worker_active
+    while True:
+        with _queue_lock:
+            if not _train_queue:
+                _queue_worker_active = False
+                return
+            kind, payload = _train_queue.popleft()
+
+        with _train_lock:
+            if kind == "single":
+                if not _is_job_cancelled(payload):
+                    _run_efficientad_job(payload, release_lock=False)
+            elif kind == "chained":
+                for jid in payload:
+                    if not _is_job_cancelled(jid):
+                        _run_efficientad_job(jid, release_lock=False)
+            elif kind == "simultaneous":
+                threads = [
+                    threading.Thread(target=_run_efficientad_job, args=(jid, False), daemon=True)
+                    for jid in payload
+                    if not _is_job_cancelled(jid)
+                ]
+                for th in threads:
+                    th.start()
+                for th in threads:
+                    th.join()
+
+
+def _enqueue_training(kind: str, payload: Any) -> int:
+    """Append a single or batch training request to the FIFO queue and ensure worker is running."""
+    global _queue_worker_active
+    with _queue_lock:
+        _train_queue.append((kind, payload))
+        q_len = len(_train_queue)
+        if not _queue_worker_active:
+            _queue_worker_active = True
+            t = threading.Thread(target=_training_queue_worker, name="clockit-train-queue", daemon=True)
+            t.start()
+        return q_len
 
 
 class TrainingJobIn(BaseModel):
@@ -38,7 +106,9 @@ class TrainingJobIn(BaseModel):
 class TrainingJobOut(BaseModel):
     id: int
     scanner_unit_id: Optional[int]
+    scanner_unit_name: Optional[str] = None
     module_id: Optional[int]
+    module_name: Optional[str] = None
     dataset_id: Optional[int]
     model_key: str
     strategy: str
@@ -57,10 +127,27 @@ class TrainingJobOut(BaseModel):
 
 
 def _to_out(r: TrainingRun) -> TrainingJobOut:
+    from sqlalchemy.orm import object_session
+
+    sess = object_session(r)
+    unit_name = None
+    mod_name = None
+    if sess is not None:
+        if r.scanner_unit_id:
+            u = sess.get(ScannerUnit, r.scanner_unit_id)
+            if u:
+                unit_name = u.name
+        if r.module_id:
+            m = sess.get(AnalysisModule, r.module_id)
+            if m:
+                mod_name = m.name
+
     return TrainingJobOut(
         id=r.id,
         scanner_unit_id=r.scanner_unit_id,
+        scanner_unit_name=unit_name,
         module_id=r.module_id,
+        module_name=mod_name,
         dataset_id=r.dataset_id,
         model_key=r.model_key,
         strategy=r.strategy,
@@ -152,7 +239,7 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
             metrics = AnomalyDINOAdapter.fit_dataset(
                 dataset_dir=ds_root,
                 out_path=out_ckpt,
-                progress_cb=lambda pct, msg: _update_progress(db, job_id, pct, msg, msg),
+                progress_cb=lambda pct, msg: (_check_cancelled(job_id), _update_progress(db, job_id, pct, msg, msg)),
             )
             run = db.get(TrainingRun, job_id)
             if run:
@@ -201,7 +288,7 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
             metrics = OmniPoseAdapter.fit_dataset(
                 dataset_dir=ds_root,
                 out_path=out_ckpt,
-                progress_cb=lambda pct, msg: _update_progress(db, job_id, pct, msg, msg),
+                progress_cb=lambda pct, msg: (_check_cancelled(job_id), _update_progress(db, job_id, pct, msg, msg)),
             )
             run = db.get(TrainingRun, job_id)
             if run:
@@ -295,11 +382,19 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
 
         class _ProgressCallback(pl.Callback):
             def on_train_epoch_start(self, trainer, pl_module):
+                _check_cancelled(job_id)
                 ep = trainer.current_epoch + 1
                 pct = 25 + int((trainer.current_epoch / max(1, run.max_epochs)) * 55)
                 _update_progress(db, job_id, pct, f"Training epoch {ep}/{run.max_epochs}", f"Epoch {ep}/{run.max_epochs} started.")
 
+            def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+                with _queue_lock:
+                    if job_id in _cancelled_jobs:
+                        trainer.should_stop = True
+                        raise _TrainingCancelledError("Training cancelled by user.")
+
             def on_train_epoch_end(self, trainer, pl_module):
+                _check_cancelled(job_id)
                 ep = trainer.current_epoch + 1
                 pct = 25 + int((ep / max(1, run.max_epochs)) * 55)
                 _update_progress(db, job_id, pct, f"Completed epoch {ep}/{run.max_epochs}", f"Epoch {ep}/{run.max_epochs} finished.")
@@ -377,6 +472,22 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
                     if unit:
                         unit.status = "Ready"
         db.commit()
+    except _TrainingCancelledError:
+        db.rollback()
+        run = db.get(TrainingRun, job_id)
+        if run:
+            run.status = "Cancelled"
+            run.current_step = "Cancelled"
+            logs = list(run.logs_json or [])
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            logs.append(f"[{ts}] Training cancelled by user.")
+            run.logs_json = logs[-100:]
+            run.completed_at = datetime.now(timezone.utc)
+            if run.module_id:
+                mod = db.get(AnalysisModule, run.module_id)
+                if mod and mod.state == "Training":
+                    mod.state = "Configured"
+            db.commit()
     except Exception as exc:
         db.rollback()
         run = db.get(TrainingRun, job_id)
@@ -395,6 +506,8 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
                     mod.state = "Failed"
             db.commit()
     finally:
+        with _queue_lock:
+            _cancelled_jobs.discard(job_id)
         db.close()
         if release_lock and _train_lock.locked():
             _train_lock.release()
@@ -421,6 +534,33 @@ def get_training_job(job_id: int, db: Session = Depends(get_db)) -> TrainingJobO
     row = db.get(TrainingRun, job_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Training job not found")
+    return _to_out(row)
+
+
+@router.post("/{job_id}/cancel", response_model=TrainingJobOut)
+def cancel_training_job(job_id: int, db: Session = Depends(get_db)) -> TrainingJobOut:
+    """Cancel a queued or running training job."""
+    row = db.get(TrainingRun, job_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Training job not found")
+    if row.status not in ("Queued", "Running"):
+        raise HTTPException(status_code=422, detail=f"Only Queued or Running jobs can be cancelled (current: {row.status}).")
+
+    logs = list(row.logs_json or [])
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    if row.status == "Queued":
+        row.status = "Cancelled"
+        row.current_step = "Cancelled"
+        row.completed_at = datetime.now(timezone.utc)
+        logs.append(f"[{ts}] Job cancelled by user while in queue.")
+    else:
+        with _queue_lock:
+            _cancelled_jobs.add(job_id)
+        row.current_step = "Cancelling..."
+        logs.append(f"[{ts}] Cancellation requested by user...")
+    row.logs_json = logs[-100:]
+    db.commit()
+    db.refresh(row)
     return _to_out(row)
 
 
@@ -470,54 +610,32 @@ def start_batch_training(body: BatchTrainingJobIn, db: Session = Depends(get_db)
             )
         prepared.append((mod, ds))
 
-    if not _train_lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail="A training job is already running.")
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    is_busy = _train_lock.locked()
+    runs: list[TrainingRun] = []
+    for mod, ds in prepared:
+        run = TrainingRun(
+            scanner_unit_id=unit.id,
+            module_id=mod.id,
+            dataset_id=ds.id,
+            model_key=mod.model_key,
+            strategy="initial_training",
+            status="Queued",
+            progress_pct=0,
+            current_step=f"Queued ({body.mode} · waiting)" if is_busy else f"Queued ({body.mode})",
+            logs_json=[f"[{ts}] Queued ({body.mode}) for module '{mod.name}' with dataset '{ds.name}' ({ds.valid_image_count} images)."],
+            max_epochs=body.max_epochs,
+            limit_train_batches=body.limit_train_batches,
+        )
+        db.add(run)
+        runs.append(run)
+    db.commit()
+    for r in runs:
+        db.refresh(r)
 
-    try:
-        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        runs: list[TrainingRun] = []
-        for mod, ds in prepared:
-            run = TrainingRun(
-                scanner_unit_id=unit.id,
-                module_id=mod.id,
-                dataset_id=ds.id,
-                model_key=mod.model_key,
-                strategy="initial_training",
-                status="Queued",
-                progress_pct=0,
-                current_step=f"Queued ({body.mode})",
-                logs_json=[f"[{ts}] Queued ({body.mode}) for module '{mod.name}' with dataset '{ds.name}' ({ds.valid_image_count} images)."],
-                max_epochs=body.max_epochs,
-                limit_train_batches=body.limit_train_batches,
-            )
-            db.add(run)
-            runs.append(run)
-        db.commit()
-        for r in runs:
-            db.refresh(r)
-
-        job_ids = [r.id for r in runs]
-        if body.mode == "chained":
-            t = threading.Thread(target=_run_chained_batch, args=(job_ids,), daemon=True)
-            t.start()
-        else:
-            def _run_parallel_batch(ids: list[int]) -> None:
-                threads = [threading.Thread(target=_run_efficientad_job, args=(jid, False), daemon=True) for jid in ids]
-                for th in threads:
-                    th.start()
-                for th in threads:
-                    th.join()
-                if _train_lock.locked():
-                    _train_lock.release()
-
-            t = threading.Thread(target=_run_parallel_batch, args=(job_ids,), daemon=True)
-            t.start()
-
-        return [_to_out(r) for r in runs]
-    except Exception:
-        if _train_lock.locked():
-            _train_lock.release()
-        raise
+    job_ids = [r.id for r in runs]
+    _enqueue_training("chained" if body.mode == "chained" else "simultaneous", job_ids)
+    return [_to_out(r) for r in runs]
 
 
 @router.post("", response_model=TrainingJobOut, status_code=201)
@@ -568,34 +686,24 @@ def start_training_job(body: TrainingJobIn, db: Session = Depends(get_db)) -> Tr
             detail=f"Training issue: Dataset '{ds.name}' is empty or failed validation ({ds.valid_image_count} valid images). Upload a valid non-empty .zip or image files.",
         )
 
-    if not _train_lock.acquire(blocking=False):
-        raise HTTPException(
-            status_code=409,
-            detail="A training job is already running. Prototype hardware supports 1 concurrent training job.",
-        )
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    is_busy = _train_lock.locked()
+    run = TrainingRun(
+        scanner_unit_id=body.scanner_unit_id,
+        module_id=body.module_id,
+        dataset_id=effective_dataset_id,
+        model_key=body.model_key,
+        strategy=body.strategy,
+        status="Queued",
+        progress_pct=0,
+        current_step="Queued (waiting in queue)" if is_busy else "Queued",
+        logs_json=[f"[{ts}] Job queued for dataset '{ds.name}' ({ds.valid_image_count} images)."],
+        max_epochs=body.max_epochs,
+        limit_train_batches=body.limit_train_batches,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
 
-    try:
-        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        run = TrainingRun(
-            scanner_unit_id=body.scanner_unit_id,
-            module_id=body.module_id,
-            dataset_id=effective_dataset_id,
-            model_key=body.model_key,
-            strategy=body.strategy,
-            status="Queued",
-            progress_pct=0,
-            current_step="Queued",
-            logs_json=[f"[{ts}] Job queued for dataset '{ds.name}' ({ds.valid_image_count} images)."],
-            max_epochs=body.max_epochs,
-            limit_train_batches=body.limit_train_batches,
-        )
-        db.add(run)
-        db.commit()
-        db.refresh(run)
-
-        t = threading.Thread(target=_run_efficientad_job, args=(run.id,), daemon=True)
-        t.start()
-        return _to_out(run)
-    except Exception:
-        _train_lock.release()
-        raise
+    _enqueue_training("single", run.id)
+    return _to_out(run)

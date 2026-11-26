@@ -38,3 +38,8 @@ export async function startBatchTraining(req: StartBatchTrainingReq): Promise<Tr
   const { data } = await apiClient.post<TrainingJob[]>('/training-jobs/batch', req)
   return data
 }
+
+export async function cancelTrainingJob(id: number): Promise<TrainingJob> {
+  const { data } = await apiClient.post<TrainingJob>(`/training-jobs/${id}/cancel`, {})
+  return data
+}

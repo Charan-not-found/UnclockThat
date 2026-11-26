@@ -226,7 +226,9 @@ export interface DatasetRecord {
 export interface TrainingJob {
   id: number
   scanner_unit_id?: number | null
+  scanner_unit_name?: string | null
   module_id?: number | null
+  module_name?: string | null
   dataset_id?: number | null
   model_key: string
   strategy: string

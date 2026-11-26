@@ -447,6 +447,68 @@ def test_multi_module_weighted_inspection():
         db.close()
 
 
+def test_training_queue_and_cancel():
+    """Verify training queue accepts jobs while lock is held and allows cancelling Queued jobs."""
+    from fastapi import HTTPException
+    from backend.app.api.v1 import training as tr_mod
+    from backend.app.database.models.scanner import DatasetRecord, ModelToggleSetting, TrainingRun
+
+    db = SessionLocal()
+    prev_toggle = db.get(ModelToggleSetting, "efficientad_small")
+    prev_enabled = prev_toggle.is_enabled if prev_toggle else True
+    if prev_toggle:
+        prev_toggle.is_enabled = True
+        db.commit()
+
+    ds = DatasetRecord(
+        name="Queue Test DS",
+        category="normal",
+        industry="General",
+        source_filename="q.zip",
+        archive_path="data/datasets/nonexistent_q.zip",
+        extracted_path="data/datasets/nonexistent_q",
+        file_count=5,
+        valid_image_count=5,
+        invalid_file_count=0,
+        duplicate_count=0,
+        validation_status="Validated",
+    )
+    db.add(ds)
+    db.commit()
+    db.refresh(ds)
+
+    job_id = None
+    acquired = tr_mod._train_lock.acquire(blocking=False)
+    try:
+        out = tr_mod.start_training_job(
+            tr_mod.TrainingJobIn(model_key="efficientad_small", dataset_id=ds.id),
+            db=db,
+        )
+        job_id = out.id
+        assert out.status == "Queued"
+
+        cancelled = tr_mod.cancel_training_job(job_id, db=db)
+        assert cancelled.status == "Cancelled"
+
+        with pytest.raises(HTTPException) as exc:
+            tr_mod.cancel_training_job(job_id, db=db)
+        assert exc.value.status_code == 422
+    finally:
+        if acquired:
+            tr_mod._train_lock.release()
+        with tr_mod._queue_lock:
+            tr_mod._train_queue.clear()
+        if job_id is not None:
+            row = db.get(TrainingRun, job_id)
+            if row:
+                db.delete(row)
+        db.delete(ds)
+        if prev_toggle:
+            prev_toggle.is_enabled = prev_enabled
+        db.commit()
+        db.close()
+
+
 def test_anomalydino_catalogue_and_pipeline(tmp_path, monkeypatch):
     """Verify AnomalyDINO is in the catalogue and its PCA-masked cosine-NN + top-1% pipeline works end-to-end."""
     import cv2
@@ -687,4 +749,66 @@ def test_high_throughput_engine_lifecycle_recovery_and_security(tmp_path):
         if prev_toggle:
             prev_toggle.is_enabled = prev_enabled
             db.commit()
+        db.close()
+
+
+def test_training_queue_and_cancel():
+    """Verify training queue accepts jobs while lock is held and allows cancelling Queued jobs."""
+    from fastapi import HTTPException
+    from backend.app.api.v1 import training as tr_mod
+    from backend.app.database.models.scanner import DatasetRecord, ModelToggleSetting, TrainingRun
+
+    db = SessionLocal()
+    prev_toggle = db.get(ModelToggleSetting, "efficientad_small")
+    prev_enabled = prev_toggle.is_enabled if prev_toggle else True
+    if prev_toggle:
+        prev_toggle.is_enabled = True
+        db.commit()
+
+    ds = DatasetRecord(
+        name="Queue Test DS",
+        category="normal",
+        industry="General",
+        source_filename="q.zip",
+        archive_path="data/datasets/nonexistent_q.zip",
+        extracted_path="data/datasets/nonexistent_q",
+        file_count=5,
+        valid_image_count=5,
+        invalid_file_count=0,
+        duplicate_count=0,
+        validation_status="Validated",
+    )
+    db.add(ds)
+    db.commit()
+    db.refresh(ds)
+
+    job_id = None
+    acquired = tr_mod._train_lock.acquire(blocking=False)
+    try:
+        out = tr_mod.start_training_job(
+            tr_mod.TrainingJobIn(model_key="efficientad_small", dataset_id=ds.id),
+            db=db,
+        )
+        job_id = out.id
+        assert out.status == "Queued"
+
+        cancelled = tr_mod.cancel_training_job(job_id, db=db)
+        assert cancelled.status == "Cancelled"
+
+        with pytest.raises(HTTPException) as exc:
+            tr_mod.cancel_training_job(job_id, db=db)
+        assert exc.value.status_code == 422
+    finally:
+        if acquired:
+            tr_mod._train_lock.release()
+        with tr_mod._queue_lock:
+            tr_mod._train_queue.clear()
+        if job_id is not None:
+            row = db.get(TrainingRun, job_id)
+            if row:
+                db.delete(row)
+        db.delete(ds)
+        if prev_toggle:
+            prev_toggle.is_enabled = prev_enabled
+        db.commit()
         db.close()

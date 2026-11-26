@@ -9,7 +9,7 @@ import Button from '../../components/common/Button'
 import StatusBadge from '../../components/common/StatusBadge'
 import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
-import { listTrainingJobs, startTrainingJob, startBatchTraining } from '../../services/trainingService'
+import { listTrainingJobs, startTrainingJob, startBatchTraining, cancelTrainingJob } from '../../services/trainingService'
 import { listDatasets } from '../../services/datasetService'
 import { listScannerUnits, getModelCatalogue } from '../../services/scannerUnitService'
 import { classifyError } from '../../services/api'
@@ -184,7 +184,8 @@ export default function Training() {
 
   const hasRunning = jobs?.some(j => j.status === 'Queued' || j.status === 'Running')
   const activeOrLatestJobs = jobs?.filter(j => j.status === 'Queued' || j.status === 'Running') ?? []
-  const realtimeJobs = activeOrLatestJobs.length > 0 ? activeOrLatestJobs : (jobs?.slice(0, 1) ?? [])
+  const nonCancelledJobs = jobs?.filter(j => j.status !== 'Cancelled') ?? []
+  const realtimeJobs = activeOrLatestJobs.length > 0 ? activeOrLatestJobs : nonCancelledJobs.slice(0, 1)
   const trainableModels = catalogue.filter(c => TRAINABLE_KEYS.has(c.model_key))
 
   return (
@@ -317,10 +318,13 @@ export default function Training() {
 
         <div className="flex items-center justify-between pt-1">
           <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-            Trains isolated checkpoints on GPU (CUDA) when available.
+            Trains isolated checkpoints on GPU (CUDA) when available. Additional requests are queued automatically.
           </p>
-          <Button size="sm" loading={starting} disabled={!!hasRunning || !!trainingIssue} onClick={handleStart}>
-            <Play size={14} /> {hasRunning ? 'Job Running…' : isAllModules ? `Train All (${batchMode})` : 'Start Training'}
+          <Button size="sm" loading={starting} disabled={!!trainingIssue} onClick={handleStart}>
+            <Play size={14} />{' '}
+            {hasRunning
+              ? (isAllModules ? `Queue Train All (${batchMode})` : 'Queue Training')
+              : (isAllModules ? `Train All (${batchMode})` : 'Start Training')}
           </Button>
         </div>
       </section>
@@ -357,8 +361,19 @@ export default function Training() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2">
-                      <h2 className="font-semibold">RUN-{job.id} · {job.model_key}</h2>
+                      <h2 className="font-semibold">
+                        RUN-{job.id} · {job.scanner_unit_name ?? units.find(u => u.id === job.scanner_unit_id)?.name ?? 'Standalone'} · {job.model_key}
+                      </h2>
                       <StatusBadge value={job.status} size="md" />
+                      {(job.status === 'Queued' || job.status === 'Running') && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => void cancelTrainingJob(job.id).then(() => listTrainingJobs().then(setJobs))}
+                        >
+                          Cancel
+                        </Button>
+                      )}
                     </div>
                     <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
                       Current stage: <strong>{job.current_step}</strong>
@@ -408,14 +423,21 @@ export default function Training() {
               <table>
                 <thead>
                   <tr>
-                    <th>Run ID</th><th>Model</th><th>Progress</th><th>Step</th>
-                    <th>Status</th><th>Metrics</th><th>Checkpoint</th><th>Started</th>
+                    <th>Run ID</th><th>Scanner Unit</th><th>Model</th><th>Progress</th><th>Step</th>
+                    <th>Status</th><th>Metrics</th><th>Checkpoint</th><th>Started</th><th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {jobs?.map(j => (
+                  {jobs?.map(j => {
+                    const unitLabel = j.scanner_unit_name ?? units.find(u => u.id === j.scanner_unit_id)?.name
+                    const modLabel = j.module_name ?? units.find(u => u.id === j.scanner_unit_id)?.modules.find(m => m.id === j.module_id)?.name
+                    return (
                     <tr key={j.id}>
                       <td className="font-mono text-xs">RUN-{j.id}</td>
+                      <td className="text-xs">
+                        <div className="font-medium">{unitLabel ?? '—'}</div>
+                        {modLabel && <div style={{ color: 'var(--color-text-secondary)' }}>{modLabel}</div>}
+                      </td>
                       <td className="font-medium">{j.model_key}</td>
                       <td className="tabular-nums font-mono text-xs">{j.progress_pct}%</td>
                       <td className="text-xs">{j.current_step}</td>
@@ -428,8 +450,19 @@ export default function Training() {
                       </td>
                       <td className="text-xs font-mono" style={{ color: 'var(--color-text-secondary)' }}>{j.checkpoint_path ?? '—'}</td>
                       <td className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>{j.started_at ? new Date(j.started_at).toLocaleString() : 'Queued'}</td>
+                      <td>
+                        {(j.status === 'Queued' || j.status === 'Running') ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => void cancelTrainingJob(j.id).then(() => listTrainingJobs().then(setJobs))}
+                          >
+                            Cancel
+                          </Button>
+                        ) : '—'}
+                      </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
