@@ -88,7 +88,10 @@ async def lifespan(_app: FastAPI):
         init_db()
     for sub in ("uploads", "inspection_results", "temporary"):
         (settings.storage_root / sub).mkdir(parents=True, exist_ok=True)
+    from backend.app.engine.worker import InspectionEngineWorker
+    InspectionEngineWorker.start()
     yield
+    InspectionEngineWorker.stop()
 
 
 def create_app() -> FastAPI:

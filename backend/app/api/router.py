@@ -8,6 +8,7 @@ from backend.app.api.v1 import (
     admin,
     analytics,
     datasets,
+    engine_api,
     health,
     inspections,
     models,
@@ -28,3 +29,4 @@ api_router.include_router(pipelines.router)
 api_router.include_router(analytics.router)
 api_router.include_router(settings.router)
 api_router.include_router(admin.router)
+api_router.include_router(engine_api.router)

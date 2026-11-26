@@ -4,6 +4,7 @@ import MainLayout from '../components/layout/MainLayout'
 import Dashboard from '../pages/Dashboard/Dashboard'
 import ScannerUnits from '../pages/ScannerUnits/ScannerUnits'
 import Inspection from '../pages/Inspection/Inspection'
+import MassTest from '../pages/MassTest/MassTest'
 import InspectionHistory from '../pages/InspectionHistory/InspectionHistory'
 import InspectionDetail from '../pages/InspectionDetail/InspectionDetail'
 import ReviewQueue from '../pages/ReviewQueue/ReviewQueue'
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { index: true,             element: <Dashboard /> },
       { path: 'scanners',        element: <ScannerUnits /> },
       { path: 'test-sample',     element: <Inspection /> },
+      { path: 'mass-test',       element: <MassTest /> },
       { path: 'inspect',         element: <Inspection /> },
       { path: 'history',         element: <InspectionHistory /> },
       { path: 'inspections/:id', element: <InspectionDetail /> },

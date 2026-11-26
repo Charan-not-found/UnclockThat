@@ -19,11 +19,8 @@ from sqlalchemy.orm import Session, selectinload
 from backend.app.core.config import BASE_DIR, get_settings
 from backend.app.database.connection import get_db
 from backend.app.database.models.scanner import CorrectionRecord, ScannerUnit
-from backend.app.models.anomalib_adapter import AnomalibCheckpointAdapter
-from backend.app.models.anomalydino_adapter import AnomalyDINOAdapter
-from backend.app.models.efficientad_adapter import EfficientAdAdapter
-from backend.app.models.omnipose_adapter import OmniPoseAdapter
-from backend.app.models.yolo_adapter import YoloSegAdapter
+from backend.app.engine.inference_scheduler import GpuInferenceScheduler, ModuleSpec
+from backend.app.engine.result_aggregator import aggregate_and_persist_result
 from backend.app.database.repositories.inspection_repository import (
     AnomalyResultRepository,
     InspectionRepository,
@@ -572,259 +569,49 @@ async def run_inspection(
     pipelineId = unit.name
     ready_mods = [m for m in unit.modules if m.state == "Ready"]
 
-    module_results: list[ModuleScanResultOut] = []
-    weighted_outputs: list[WeightedOutputOut] = []
-    distinct_outputs: dict[str, Any] = {}
-    per_module_persist: list[dict[str, Any]] = []
-
-    if ready_mods:
-        raw_weights = [
-            max(1, min(100, int(weight_overrides.get(m.id, (m.config_json or {}).get("weight", 100)))))
-            for m in ready_mods
-        ]
-        total_weight = sum(raw_weights) or 1
-
-        for mod, w in zip(ready_mods, raw_weights):
-            cfg = mod.config_json or {}
-            cw = cfg.get("cloned_weights_path")
-            ckpt_path = (BASE_DIR / cw) if cw and (BASE_DIR / cw).is_file() else None
-            res = _run_single_module(raw_bytes, mod.model_key, ckpt_path, threshold)
-            ratio = round(w / total_weight, 4)
-            defect_classes = sorted({d.type for d in res["defects"] if d.type})
-            selected_outputs = list(mod.selected_outputs_json or [])
-            mod_out = ModuleScanResultOut(
-                module_id=mod.id,
-                module_name=mod.name,
-                model_key=mod.model_key,
-                model_display_name=res["model_name"],
-                weight=w,
-                weight_ratio=ratio,
-                selected_outputs=selected_outputs,
-                anomaly_score=round(res["anomaly_score"], 4),
-                confidence_score=round(res["confidence_score"], 4),
-                defects=res["defects"],
-                defect_classes=defect_classes,
-                heatmap_url=res["heatmap_url"],
-                processing_time_ms=res["processing_time_ms"],
-            )
-            module_results.append(mod_out)
-            per_module_persist.append({**res, "module": mod})
-
-        if len(module_results) >= 2:
-            anomaly_score = round(
-                sum(r.anomaly_score * (w / total_weight) for r, w in zip(module_results, raw_weights)),
-                4,
-            )
-            confidence_score = round(
-                sum(r.confidence_score * (w / total_weight) for r, w in zip(module_results, raw_weights)),
-                4,
-            )
-            weighted_outputs = [
-                WeightedOutputOut(
-                    output_key="anomaly_score",
-                    label="Anomaly Score (Weighted Avg)",
-                    weighted_value=anomaly_score,
-                    weights_used=[
-                        {
-                            "module_id": r.module_id,
-                            "module_name": r.module_name,
-                            "weight": r.weight,
-                            "ratio": r.weight_ratio,
-                            "value": r.anomaly_score,
-                        }
-                        for r in module_results
-                    ],
-                ),
-                WeightedOutputOut(
-                    output_key="confidence_score",
-                    label="Confidence Score (Weighted Avg)",
-                    weighted_value=confidence_score,
-                    weights_used=[
-                        {
-                            "module_id": r.module_id,
-                            "module_name": r.module_name,
-                            "weight": r.weight,
-                            "ratio": r.weight_ratio,
-                            "value": r.confidence_score,
-                        }
-                        for r in module_results
-                    ],
-                ),
-            ]
-        else:
-            anomaly_score = module_results[0].anomaly_score
-            confidence_score = module_results[0].confidence_score
-
-        # Combine defects across all modules (deduplicated/tagged) and collect distinct outputs as-is
-        defects = []
-        for r in module_results:
-            for d in r.defects:
-                defects.append(d)
-
-        all_defect_classes = sorted({c for r in module_results for c in r.defect_classes})
-        heatmaps = [
-            {"module_id": r.module_id, "module_name": r.module_name, "heatmap_url": r.heatmap_url}
-            for r in module_results
-            if r.heatmap_url
-        ]
-        # Identify non-shared / distinct outputs from selected_outputs
-        output_counts: dict[str, int] = {}
-        for r in module_results:
-            for out_k in r.selected_outputs:
-                output_counts[out_k] = output_counts.get(out_k, 0) + 1
-        unique_outputs = []
-        for r in module_results:
-            for out_k in r.selected_outputs:
-                if output_counts.get(out_k, 0) == 1 or out_k in (
-                    "defect_class",
-                    "segmentation_mask",
-                    "bounding_boxes",
-                    "heatmap",
-                ):
-                    if out_k == "defect_class":
-                        summary = ", ".join(r.defect_classes) if r.defect_classes else "None detected"
-                    elif out_k in ("segmentation_mask", "bounding_boxes"):
-                        summary = f"{len(r.defects)} region(s)"
-                    elif out_k == "heatmap":
-                        summary = "Heatmap generated" if r.heatmap_url else "No heatmap"
-                    elif out_k == "anomaly_score":
-                        summary = f"{r.anomaly_score:.3f}"
-                    elif out_k == "confidence_score":
-                        summary = f"{r.confidence_score:.3f}"
-                    else:
-                        summary = out_k
-                    unique_outputs.append(
-                        {
-                            "module_id": r.module_id,
-                            "module_name": r.module_name,
-                            "output_key": out_k,
-                            "summary": summary,
-                            "shared": output_counts.get(out_k, 0) > 1,
-                        }
-                    )
-
-        distinct_outputs = {
-            "defect_classes": all_defect_classes,
-            "heatmaps": heatmaps,
-            "bounding_boxes_count": len(defects),
-            "unique_module_outputs": unique_outputs,
-        }
-        heatmap_path = next((p["heatmap_path"] for p in per_module_persist if p["heatmap_path"]), None)
-        heatmap_url = next((r.heatmap_url for r in module_results if r.heatmap_url), None)
-        processing_time_ms = sum((r.processing_time_ms or 0.0) for r in module_results) or None
-        used_model_name = (
-            f"Multi-Module ({len(module_results)}): " + " + ".join(r.model_display_name for r in module_results)
-            if len(module_results) > 1
-            else module_results[0].model_display_name
+    specs = [
+        ModuleSpec(
+            module_id=m.id,
+            module_name=m.name,
+            model_key=m.model_key,
+            weight=int((m.config_json or {}).get("weight", 100)),
+            selected_outputs=list(m.selected_outputs_json or []),
+            cloned_weights_rel=(m.config_json or {}).get("cloned_weights_path"),
         )
-    else:
-        single = _run_single_module(raw_bytes, None, None, threshold)
-        anomaly_score = single["anomaly_score"]
-        confidence_score = single["confidence_score"]
-        defects = single["defects"]
-        heatmap_path = single["heatmap_path"]
-        heatmap_url = single["heatmap_url"]
-        processing_time_ms = single["processing_time_ms"]
-        used_model_name = single["model_name"]
-        per_module_persist.append({**single, "module": None})
+        for m in ready_mods
+    ]
 
-    if anomaly_score >= max(0.75, threshold + 0.2):
-        decision = "FAIL"
-    elif anomaly_score >= threshold or defects:
-        decision = "REVIEW_REQUIRED"
-    else:
-        decision = "PASS"
-
-    quality_score = max(0.05, min(0.99, round(1.0 - anomaly_score * 0.65, 2)))
-    mfg_id, pipe_id = _ensure_manufacturer_and_pipeline(db, industry, pipelineId)
-
-    insp = InspectionRepository(db).create(
-        manufacturer_id=mfg_id,
-        pipeline_config_id=pipe_id,
+    exec_out = GpuInferenceScheduler.execute_modules(
+        raw_bytes=raw_bytes,
+        modules=specs,
+        threshold=threshold,
+        heuristic_fn=_analyze_image_bytes,
+        weight_overrides=weight_overrides,
+    )
+    agg = aggregate_and_persist_result(
+        db,
         scanner_unit_id=scannerUnitId,
-        product_serial=product,
+        industry=industry,
+        product=product,
+        pipeline_name=pipelineId,
+        stored_image_path=stored_path,
+        threshold=threshold,
+        execution_out=exec_out,
         station_name="Web UI Station",
-        image_file_path=str(stored_path),
-        status="completed",
-        overall_decision=decision,
-        quality_score=quality_score,
-        inspected_at=datetime.now(timezone.utc),
     )
-
-    active_models = ModelConfigRepository(db).list_active_by_manufacturer(mfg_id)
-    primary_ar = None
-    for item in per_module_persist:
-        model_cfg_id = None
-        m_name = item["model_name"]
-        if m_name:
-            matched = next((m for m in active_models if m.name == m_name), None)
-            if matched:
-                model_cfg_id = matched.id
-        if model_cfg_id is None and active_models:
-            model_cfg_id = active_models[0].id
-
-        ar_row = AnomalyResultRepository(db).create(
-            inspection_id=insp.id,
-            model_config_id=model_cfg_id,
-            anomaly_score=item["anomaly_score"],
-            confidence_score=item["confidence_score"],
-            is_anomalous=bool(item["defects"] or item["anomaly_score"] >= threshold),
-            heatmap_file_path=item["heatmap_path"],
-            processing_time_ms=item["processing_time_ms"],
-            bounding_boxes_json=[d.model_dump() for d in item["defects"]],
-        )
-        if primary_ar is None:
-            primary_ar = ar_row
-
-    ar = primary_ar
-
-    top_severity = defects[0].severity if defects else (
-        "Minor" if decision == "REVIEW_REQUIRED" else "Informational"
-    )
-    SeverityScoreRepository(db).create(
-        inspection_id=insp.id,
-        anomaly_result_id=ar.id,
-        severity_level=top_severity,
-        numeric_score=anomaly_score,
-        requires_human_review=(decision == "REVIEW_REQUIRED"),
-    )
-    db.commit()
-
-    # Save standardized JSON inspection report to outputs/reports/
-    reports_dir = BASE_DIR / "outputs" / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    report_payload = {
-        "inspection_id": f"INS-{insp.id}",
-        "scanner_unit_id": scannerUnitId,
-        "industry": industry,
-        "product": product,
-        "model_used": used_model_name,
-        "overall_decision": decision,
-        "quality_score": int(round(quality_score * 100)),
-        "anomaly_score": anomaly_score,
-        "severity": top_severity,
-        "defects": [d.model_dump() for d in defects],
-        "module_results": [r.model_dump() for r in module_results],
-        "weighted_outputs": [w.model_dump() for w in weighted_outputs],
-        "distinct_outputs": distinct_outputs,
-        "timestamp": insp.inspected_at.isoformat(),
-    }
-    (reports_dir / f"INS-{insp.id}.json").write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
-
-    status_label = _decision_to_status(decision)
     return InspectionRunOut(
-        inspectionId=f"INS-{insp.id}",
-        quality_score=int(round(quality_score * 100)),
-        status=status_label,
-        overall_decision=decision,
-        severity=top_severity,
-        defects=defects,
-        model_used=used_model_name,
-        heatmap_url=heatmap_url,
-        module_results=module_results,
-        weighted_outputs=weighted_outputs,
-        distinct_outputs=distinct_outputs,
-        score=int(round(quality_score * 100)),
+        inspectionId=agg["inspectionId"],
+        quality_score=agg["quality_score"],
+        status=agg["status"],
+        overall_decision=agg["overall_decision"],
+        severity=agg["severity"],
+        defects=[DefectOut(**d) for d in agg["defects"]],
+        model_used=agg["model_used"],
+        heatmap_url=agg["heatmap_url"],
+        module_results=[ModuleScanResultOut(**r) for r in agg["module_results"]],
+        weighted_outputs=[WeightedOutputOut(**w) for w in agg["weighted_outputs"]],
+        distinct_outputs=agg["distinct_outputs"],
+        score=agg["score"],
         isMock=False,
     )
 

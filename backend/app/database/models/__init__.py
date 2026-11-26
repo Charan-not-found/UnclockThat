@@ -1,5 +1,6 @@
 """ORM model exports."""
 
+from backend.app.database.models.engine_jobs import InspectionJob, JobBatch
 from backend.app.database.models.inspection import AnomalyResult, InspectionRecord, SeverityScore
 from backend.app.database.models.manufacturer import ManufacturerProfile, User
 from backend.app.database.models.model_config import ModelConfig
@@ -27,4 +28,6 @@ __all__ = [
     "TrainingRun",
     "CorrectionRecord",
     "ModelToggleSetting",
+    "JobBatch",
+    "InspectionJob",
 ]

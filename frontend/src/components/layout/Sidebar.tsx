@@ -9,6 +9,7 @@ const NAV = [
     { to: '/',            label: 'Overview',           icon: LayoutDashboard },
     { to: '/scanners',    label: 'Scanner Units',      icon: Layers          },
     { to: '/test-sample', label: 'Test Sample',        icon: FlaskConical    },
+    { to: '/mass-test',   label: 'Mass Test',          icon: Layers          },
     { to: '/history',     label: 'Inspection History', icon: ClipboardList   },
     { to: '/review',      label: 'Review Queue',       icon: Bell            },
   ]},

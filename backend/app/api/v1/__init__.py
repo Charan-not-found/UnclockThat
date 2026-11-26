@@ -3,6 +3,7 @@ from backend.app.api.v1 import (
     admin,
     analytics,
     datasets,
+    engine_api,
     health,
     inspections,
     models,

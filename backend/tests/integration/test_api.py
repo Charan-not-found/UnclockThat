@@ -270,6 +270,7 @@ def test_zip_validator_and_480p_resizing(tmp_path):
     import zipfile
     import cv2
     import numpy as np
+    from sqlalchemy import select
     from fastapi import HTTPException
     from backend.app.api.v1.datasets import _validate_and_extract_zip
 
@@ -506,4 +507,157 @@ def test_inspection_requires_scanner_unit():
         assert exc.value.status_code == 422
         assert "Scanner Unit" in exc.value.detail
     finally:
+        db.close()
+
+
+def test_high_throughput_engine_lifecycle_recovery_and_security(tmp_path):
+    """Stage 6 test: ZIP security, bulk ingestion, worker execution, corrupt handling, cancel, and restart recovery."""
+    import io
+    import zipfile
+    import cv2
+    import numpy as np
+    from sqlalchemy import select
+    from starlette.datastructures import UploadFile
+    from backend.app.api.v1.engine_api import (
+        _create_batch_and_jobs,
+        cancel_batch,
+        engine_metrics,
+        engine_status,
+        get_batch_results,
+        get_batch_status,
+    )
+    from backend.app.api.v1.scanner_units import ModuleIn, ScannerUnitIn, add_module, create_scanner_unit, delete_scanner_unit
+    from backend.app.database.models.engine_jobs import InspectionJob, JobBatch
+    from backend.app.database.models.scanner import ModelToggleSetting
+    from backend.app.engine.worker import InspectionEngineWorker
+
+    db = SessionLocal()
+    prev_toggle = db.get(ModelToggleSetting, "opencv_heuristic")
+    prev_enabled = prev_toggle.is_enabled if prev_toggle else True
+    if prev_toggle:
+        prev_toggle.is_enabled = True
+        db.commit()
+
+    unit_id = None
+    batch_uid = None
+    try:
+        unit = create_scanner_unit(
+            ScannerUnitIn(name="Engine Test Unit", industry="Automotive", product_name="Gear"),
+            db=db,
+        )
+        unit_id = unit.id
+        add_module(
+            unit_id,
+            ModuleIn(name="Heuristic", model_key="opencv_heuristic", selected_outputs=["anomaly_score"]),
+            db=db,
+        )
+
+        # Build a ZIP containing: 2 valid images, 1 corrupt image, 1 traversal entry, 1 unsupported txt
+        img = np.zeros((64, 64, 3), dtype=np.uint8)
+        _, png_bytes = cv2.imencode(".png", img)
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            zf.writestr("ok_1.png", png_bytes.tobytes())
+            zf.writestr("ok_2.png", png_bytes.tobytes())
+            zf.writestr("corrupt.png", b"not-a-valid-png")
+            zf.writestr("../escape.png", png_bytes.tobytes())
+            zf.writestr("readme.txt", b"ignored")
+        zip_buf.seek(0)
+
+        import uuid
+        idem_k = f"idem-test-{uuid.uuid4().hex[:8]}"
+        up = UploadFile(filename="batch.zip", file=zip_buf)
+        sub = _create_batch_and_jobs(
+            db,
+            scanner_unit_id=unit_id,
+            source_type="MASS_TEST",
+            files=[up],
+            threshold=0.5,
+            priority=5,
+            idempotency_key=idem_k,
+            metadata_str=None,
+        )
+        batch_uid = sub.batch_id
+        assert sub.total_items == 3  # ok_1, ok_2, corrupt
+        assert len(sub.rejected_files) == 2  # traversal + txt
+
+        # Idempotency check returns same batch without duplicating jobs
+        sub2 = _create_batch_and_jobs(
+            db,
+            scanner_unit_id=unit_id,
+            source_type="MASS_TEST",
+            files=[],
+            threshold=0.5,
+            priority=5,
+            idempotency_key=idem_k,
+            metadata_str=None,
+        )
+        assert sub2.batch_id == batch_uid
+
+        # Process 1st job synchronously via worker
+        assert InspectionEngineWorker.process_next_job() is True
+        db.expire_all()
+        st = get_batch_status(batch_uid, db=db)
+        assert st["completed_items"] == 1
+
+        # Simulate interrupted job + restart recovery
+        batch_row = db.scalar(select(JobBatch).where(JobBatch.batch_uid == batch_uid))
+        next_job = db.scalar(
+            select(InspectionJob).where(InspectionJob.batch_id == batch_row.id, InspectionJob.status == "QUEUED")
+        )
+        next_job.status = "PROCESSING"
+        db.commit()
+        recovered = InspectionEngineWorker.recover_interrupted_jobs()
+        assert recovered >= 1
+        db.expire_all()
+        assert db.get(InspectionJob, next_job.id).status == "QUEUED"
+
+        # Process remaining jobs (ok_2 + corrupt)
+        while InspectionEngineWorker.process_next_job():
+            pass
+
+        db.expire_all()
+        st_final = get_batch_status(batch_uid, db=db)
+        assert st_final["completed_items"] == 2
+        assert st_final["failed_items"] == 1  # corrupt.png failed cleanly, not false PASS
+
+        res_page = get_batch_results(
+            batch_uid,
+            limit=50,
+            offset=0,
+            job_status=None,
+            decision=None,
+            severity=None,
+            db=db,
+        )
+        assert res_page["total"] == 3
+
+        # Cancel test on a fresh batch
+        zip_buf.seek(0)
+        up2 = UploadFile(filename="batch2.zip", file=zip_buf)
+        sub_cancel = _create_batch_and_jobs(
+            db,
+            scanner_unit_id=unit_id,
+            source_type="API",
+            files=[up2],
+            threshold=0.5,
+            priority=5,
+            idempotency_key=None,
+            metadata_str=None,
+        )
+        cancelled = cancel_batch(sub_cancel.batch_id, db=db)
+        assert cancelled["cancelled_items"] == 3
+        assert cancelled["status"] == "CANCELLED"
+
+        # Monitoring endpoints
+        es = engine_status()
+        em = engine_metrics()
+        assert "queue_depth" in es
+        assert em["completed_jobs"] >= 2
+    finally:
+        if unit_id is not None:
+            delete_scanner_unit(unit_id, db=db)
+        if prev_toggle:
+            prev_toggle.is_enabled = prev_enabled
+            db.commit()
         db.close()
