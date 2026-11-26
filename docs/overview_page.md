@@ -1,4 +1,4 @@
-# CLOCKIT — Overview Dashboard
+# PROMETHEUS-X — Overview Dashboard
 ## Product & UI Implementation Specification
 
 **Component:** `frontend/src/pages/Dashboard/Dashboard.tsx`  
@@ -9,7 +9,7 @@
 
 # 1. Design Philosophy
 
-The Overview page is the operational command centre of CLOCKIT.
+The Overview page is the operational command centre of PROMETHEUS-X.
 
 It should answer four questions immediately:
 
@@ -32,7 +32,7 @@ It should answer four questions immediately:
 
 Use a clean industrial analytics interface:
 
-- Neutral dark or light application theme, consistent with global CLOCKIT styling.
+- Neutral dark or light application theme, consistent with global PROMETHEUS-X styling.
 - Restrained use of red, amber, yellow, and green for operational statuses.
 - Subtle borders and background separation.
 - Compact typography and well-aligned numerical values.
@@ -233,7 +233,7 @@ Do not allow decimal tick values.
 - Show all three series in the tooltip.
 - Include a readable legend.
 - Avoid unnecessary chart gridlines.
-- Maintain consistent colors throughout CLOCKIT.
+- Maintain consistent colors throughout PROMETHEUS-X.
 
 ### Important Data Consistency Rule
 
@@ -494,7 +494,7 @@ The implementation is complete only when:
 - [ ] Partial API failures do not destroy successfully loaded sections.
 - [ ] No mock or hardcoded analytics data exists.
 - [ ] Responsive layouts work correctly.
-- [ ] Status and severity colors are consistent across CLOCKIT.
+- [ ] Status and severity colors are consistent across PROMETHEUS-X.
 
 ---
 

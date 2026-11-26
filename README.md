@@ -1,6 +1,6 @@
-# CLOCKIT — Industrial AI Visual Inspection Platform
+# PROMETHEUS-X — Industrial AI Visual Inspection Platform
 
-**CLOCKIT** is a local-first industrial anomaly detection and quality inspection platform. Create **Scanner Units**, attach and train multiple AI **Analysis Modules** on normal/labelled datasets, run **single-sample** or **high-throughput Mass Test** inspections with weighted multi-module aggregation, and review results in real time.
+**PROMETHEUS-X** is a local-first industrial anomaly detection and quality inspection platform. Create **Scanner Units**, attach and train multiple AI **Analysis Modules** on normal/labelled datasets, run **single-sample** or **high-throughput Mass Test** inspections with weighted multi-module aggregation, and review results in real time.
 
 ---
 

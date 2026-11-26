@@ -1,14 +1,13 @@
-```bat
 @echo off
 setlocal EnableExtensions
 
-title CLOCKIT - Environment Setup
+title PROMETHEUS-X - Environment Setup
 
 cd /d "%~dp0"
 
 echo.
 echo ============================================
-echo       CLOCKIT - Environment Setup
+echo       PROMETHEUS-X - Environment Setup
 echo ============================================
 echo.
 
@@ -147,7 +146,7 @@ if errorlevel 1 (
 
 echo.
 echo ============================================
-echo       CLOCKIT SETUP COMPLETE!
+echo       PROMETHEUS-X SETUP COMPLETE!
 echo ============================================
 echo.
 echo Python environment : .venv
@@ -155,7 +154,7 @@ echo Frontend           : Installed
 echo AI models          : Installed
 echo Database           : Initialized
 echo.
-echo Run run.bat to start CLOCKIT.
+echo Run run.bat to start PROMETHEUS-X.
 echo.
 
 pause
@@ -169,7 +168,7 @@ exit /b 0
 :error
 echo.
 echo ============================================
-echo       CLOCKIT SETUP FAILED
+echo       PROMETHEUS-X SETUP FAILED
 echo ============================================
 echo.
 echo Review the error above before continuing.
@@ -178,4 +177,3 @@ echo.
 pause
 endlocal
 exit /b 1
-```

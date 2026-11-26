@@ -20,7 +20,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "CLOCKIT"
+    app_name: str = "PROMETHEUS-X"
     app_env: str = "development"
     app_debug: bool = True
     api_v1_prefix: str = "/api/v1"

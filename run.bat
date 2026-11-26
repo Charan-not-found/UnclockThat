@@ -8,14 +8,14 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-echo Starting CLOCKIT Backend (http://127.0.0.1:8000) ...
-start "CLOCKIT Backend" cmd /k "cd /d "%~dp0" && ".venv\Scripts\python.exe" backend\app\main.py %*"
+echo Starting PROMETHEUS-X Backend (http://127.0.0.1:8000) ...
+start "PROMETHEUS-X Backend" cmd /k "cd /d "%~dp0" && ".venv\Scripts\python.exe" backend\app\main.py %*"
 
-echo Starting CLOCKIT Frontend (http://localhost:5173) ...
-start "CLOCKIT Frontend" cmd /k "cd /d "%~dp0frontend" && npm.cmd run dev"
+echo Starting PROMETHEUS-X Frontend (http://localhost:5173) ...
+start "PROMETHEUS-X Frontend" cmd /k "cd /d "%~dp0frontend" && npm.cmd run dev"
 
 echo.
-echo CLOCKIT is launching:
+echo PROMETHEUS-X is launching:
 echo   Frontend UI : http://localhost:5173
 echo   API Docs    : http://127.0.0.1:8000/api/docs
 echo.

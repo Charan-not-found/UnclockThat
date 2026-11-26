@@ -38,10 +38,10 @@ export default function Sidebar() {
       <div className="px-4 py-4 border-b border-slate-800">
         <div className="flex items-center gap-2">
           <div className="h-7 w-7 rounded bg-blue-600 flex items-center justify-center">
-            <span className="text-white font-bold text-xs">CK</span>
+            <span className="text-white font-bold text-xs">PX</span>
           </div>
           <div>
-            <div className="text-sm font-semibold text-white leading-none">CLOCKIT</div>
+            <div className="text-sm font-semibold text-white leading-none">PROMETHEUS-X</div>
             <div className="text-xs text-slate-500 mt-0.5">Scanner Platform</div>
           </div>
         </div>
@@ -66,7 +66,7 @@ export default function Sidebar() {
       </nav>
 
       <div className="px-4 py-3 border-t border-slate-800 text-xs text-slate-500">
-        CLOCKIT / PROMETHEUS-X · v1.1
+        PROMETHEUS-X · v1.1
       </div>
     </aside>
   )

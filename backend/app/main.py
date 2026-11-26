@@ -74,7 +74,7 @@ def reset_brand_new() -> None:
                         pass
 
     init_db()
-    print("[CLOCKIT] Brand-new reset complete (DB + runtime files cleared; pretrained weights preserved).")
+    print("[PROMETHEUS-X] Brand-new reset complete (DB + runtime files cleared; pretrained weights preserved).")
 
 
 @asynccontextmanager
@@ -138,7 +138,7 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run CLOCKIT backend server")
+    parser = argparse.ArgumentParser(description="Run PROMETHEUS-X backend server")
     parser.add_argument(
         "--resetdb",
         action="store_true",

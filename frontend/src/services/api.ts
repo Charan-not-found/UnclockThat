@@ -31,7 +31,7 @@ export interface ApiError {
 export function classifyError(err: unknown): ApiError {
   if (axios.isAxiosError(err)) {
     const status = err.response?.status
-    if (!err.response) return { code: 'NETWORK_UNAVAILABLE', message: 'Cannot reach the CLOCKIT server. Is the backend running?' }
+    if (!err.response) return { code: 'NETWORK_UNAVAILABLE', message: 'Cannot reach the PROMETHEUS-X server. Is the backend running?' }
     if (status === 401) return { code: 'UNAUTHORIZED', message: 'Session expired or not authenticated.' }
     if (status === 403) return { code: 'FORBIDDEN', message: 'You do not have permission to perform this action.' }
     if (status === 404) return { code: 'NOT_FOUND', message: 'Resource not found.' }
