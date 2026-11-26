@@ -1,8 +1,8 @@
 """PROMETHEUS-X Web Line Simulator (runs on port 5180).
 
-Serves a polished browser UI at http://127.0.0.1:5180 that streams images from
-simulator/sample_data/ (or any chosen folder) to the PROMETHEUS-X backend,
-displays live Unscanned vs Scanned previews, True/False verdicts, KPIs, and CSV export.
+Serves a browser UI at http://127.0.0.1:5180 with a dropdown to pick any ZIP file
+inside simulator/sample_data/ (or loose images), stream images one-by-one to the
+PROMETHEUS-X backend, and display live True/False results & heatmaps.
 """
 
 from __future__ import annotations
@@ -17,9 +17,12 @@ from urllib.parse import parse_qs, quote, urlparse
 from stream_simulator import (
     DEFAULT_SAMPLE_DIR,
     IMAGE_EXTS,
-    check_image_async,
-    check_image_sync,
+    check_bytes_async,
+    check_bytes_sync,
+    list_images_in_zip,
     list_scanner_units,
+    list_zip_archives,
+    read_image_bytes,
 )
 
 HTML_PAGE = """<!doctype html>
@@ -39,7 +42,7 @@ HTML_PAGE = """<!doctype html>
     .brand { display: flex; align-items: center; gap: 10px; }
     .badge { background: var(--blue); color: #fff; font-weight: 700; font-size: 12px; padding: 6px 8px; border-radius: 6px; }
     h1 { font-size: 19px; margin: 0; }
-    .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .sub { color: #94a3b8; font-size: 12px; margin-top: 2px; }
     .pill { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); }
     .pill.live { border-color: #22c55e66; color: var(--green); background: #22c55e18; }
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
@@ -80,7 +83,7 @@ HTML_PAGE = """<!doctype html>
       <div class="badge">PX</div>
       <div>
         <h1>PROMETHEUS-X — Production Line Simulator</h1>
-        <div class="sub">Streams images one-by-one to the inspection server and receives <strong>True</strong> (PASS) / <strong>False</strong> (FAIL or REVIEW_REQUIRED).</div>
+        <div class="sub">Pick a ZIP archive from <code>simulator/sample_data/</code> to stream images one-by-one and receive <strong>True</strong> (PASS) / <strong>False</strong> (FAIL or REVIEW_REQUIRED).</div>
       </div>
     </div>
     <span id="statusPill" class="pill">IDLE</span>
@@ -102,6 +105,9 @@ HTML_PAGE = """<!doctype html>
       <label>Scanner Unit
         <select id="unitId"></select>
       </label>
+      <label>Dataset ZIP (simulator/sample_data)
+        <select id="zipSource"></select>
+      </label>
       <label>Mode
         <select id="mode">
           <option value="sync">sync (/inspections)</option>
@@ -114,13 +120,10 @@ HTML_PAGE = """<!doctype html>
       <label>Delay (ms)
         <input id="delayMs" type="number" value="200" min="0" style="width:78px" />
       </label>
-      <label>Folder
-        <input id="folder" value="__DEFAULT_DIR__" size="28" />
-      </label>
       <label class="chk"><input type="checkbox" id="loopChk" /> Loop</label>
     </div>
     <div class="row" style="margin-top:12px;">
-      <button class="sec" onclick="loadUnits()">Refresh Units</button>
+      <button class="sec" onclick="refreshAll()">Refresh Units &amp; ZIPs</button>
       <button id="startBtn" onclick="startStream()">Start Stream</button>
       <button id="stopBtn" class="danger" onclick="stopStream()" disabled>Stop</button>
       <button class="sec" onclick="clearResults()">Clear</button>
@@ -182,6 +185,27 @@ async function loadUnits() {
     opt.textContent = `${u.id}: ${u.name} (${u.status})`;
     sel.appendChild(opt);
   }
+}
+
+async function loadSources() {
+  const res = await fetch('/sim/sources');
+  const sources = await res.json();
+  const sel = document.getElementById('zipSource');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const s of sources) {
+    const opt = document.createElement('option');
+    opt.value = s.value;
+    opt.textContent = s.label;
+    sel.appendChild(opt);
+  }
+  if (prev && sources.some(s => s.value === prev)) {
+    sel.value = prev;
+  }
+}
+
+async function refreshAll() {
+  await Promise.all([loadUnits(), loadSources()]);
 }
 
 function stopStream() {
@@ -247,15 +271,16 @@ function exportCsv() {
 async function startStream() {
   const unitId = document.getElementById('unitId').value;
   if (!unitId) { alert('Select a Scanner Unit first'); return; }
-  const folder = document.getElementById('folder').value;
+  const source = document.getElementById('zipSource').value;
+  if (!source) { alert('Add a .zip file to simulator/sample_data/ first'); return; }
   const apiUrl = document.getElementById('apiUrl').value;
   const mode = document.getElementById('mode').value;
   const threshold = Number(document.getElementById('threshold').value) || 0.5;
   const delayMs = Number(document.getElementById('delayMs').value) || 0;
 
-  const listRes = await fetch('/sim/files?folder=' + encodeURIComponent(folder));
+  const listRes = await fetch('/sim/files?source=' + encodeURIComponent(source));
   const files = await listRes.json();
-  if (!files.length) { alert('No images found in folder'); return; }
+  if (!files.length) { alert('No images found in selected ZIP / folder'); return; }
 
   stopped = false;
   document.getElementById('startBtn').disabled = true;
@@ -270,12 +295,12 @@ async function startStream() {
       if (stopped) break;
       const f = files[i];
       document.getElementById('prevOrigBox').innerHTML =
-        `<img src="/sim/image?folder=${encodeURIComponent(folder)}&filename=${encodeURIComponent(f)}" />`;
+        `<img src="/sim/image?source=${encodeURIComponent(source)}&filename=${encodeURIComponent(f)}" />`;
 
       const r = await fetch('/sim/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_url: apiUrl, unit_id: Number(unitId), folder, filename: f, mode, threshold }),
+        body: JSON.stringify({ api_url: apiUrl, unit_id: Number(unitId), source, filename: f, mode, threshold }),
       });
       const d = await r.json();
       d.seq = allRows.length + 1;
@@ -303,11 +328,21 @@ async function startStream() {
   document.getElementById('statusPill').className = 'pill';
 }
 
-loadUnits().catch(() => {});
+refreshAll().catch(() => {});
 </script>
 </body>
 </html>
 """
+
+
+def _resolve_safe_source(source_val: str) -> Path:
+    if source_val == "__loose__":
+        return DEFAULT_SAMPLE_DIR
+    candidate = (DEFAULT_SAMPLE_DIR / Path(source_val).name).resolve()
+    if candidate.parent == DEFAULT_SAMPLE_DIR.resolve() and candidate.is_file() and candidate.suffix.lower() == ".zip":
+        return candidate
+    p = Path(source_val)
+    return p if p.exists() else DEFAULT_SAMPLE_DIR
 
 
 class SimHandler(BaseHTTPRequestHandler):
@@ -325,7 +360,7 @@ class SimHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            html = HTML_PAGE.replace("__DEFAULT_DIR__", str(DEFAULT_SAMPLE_DIR).replace("\\", "\\\\")).encode("utf-8")
+            html = HTML_PAGE.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))
@@ -342,24 +377,37 @@ class SimHandler(BaseHTTPRequestHandler):
                 self._send_json(502, {"error": str(exc)})
             return
 
+        if parsed.path == "/sim/sources":
+            sources = []
+            for zp in list_zip_archives(DEFAULT_SAMPLE_DIR):
+                cnt = len(list_images_in_zip(zp))
+                sources.append({"value": zp.name, "label": f"{zp.name} ({cnt} images)"})
+            loose = [p for p in DEFAULT_SAMPLE_DIR.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS] if DEFAULT_SAMPLE_DIR.is_dir() else []
+            if loose:
+                sources.append({"value": "__loose__", "label": f"Loose images in sample_data ({len(loose)} images)"})
+            self._send_json(200, sources)
+            return
+
         if parsed.path == "/sim/files":
-            folder = Path(qs.get("folder", [str(DEFAULT_SAMPLE_DIR)])[0])
-            if not folder.is_dir():
+            source = _resolve_safe_source(qs.get("source", ["__loose__"])[0])
+            if source.is_file() and source.suffix.lower() == ".zip":
+                self._send_json(200, list_images_in_zip(source))
+            elif source.is_dir():
+                files = [p.name for p in sorted(source.iterdir()) if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
+                self._send_json(200, files)
+            else:
                 self._send_json(200, [])
-                return
-            files = [p.name for p in sorted(folder.iterdir()) if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
-            self._send_json(200, files)
             return
 
         if parsed.path == "/sim/image":
-            folder = Path(qs.get("folder", [str(DEFAULT_SAMPLE_DIR)])[0])
-            fname = Path(qs.get("filename", [""])[0]).name
-            target = folder / fname
-            if not target.is_file():
+            source = _resolve_safe_source(qs.get("source", ["__loose__"])[0])
+            member = qs.get("filename", [""])[0]
+            try:
+                fname, data = read_image_bytes(source, member)
+            except Exception:
                 self.send_error(404)
                 return
-            ctype, _ = mimetypes.guess_type(str(target))
-            data = target.read_bytes()
+            ctype, _ = mimetypes.guess_type(fname)
             self.send_response(200)
             self.send_header("Content-Type", ctype or "application/octet-stream")
             self.send_header("Content-Length", str(len(data)))
@@ -375,15 +423,16 @@ class SimHandler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length).decode("utf-8"))
-        img_path = Path(body["folder"]) / Path(body["filename"]).name
+        source = _resolve_safe_source(body.get("source", "__loose__"))
+        member = body["filename"]
         threshold = float(body.get("threshold", 0.5))
         api_url = body["api_url"].rstrip("/")
         try:
+            fname, raw = read_image_bytes(source, member)
             if body.get("mode") == "async":
-                res = check_image_async(api_url, int(body["unit_id"]), img_path, threshold=threshold)
+                res = check_bytes_async(api_url, int(body["unit_id"]), fname, raw, threshold=threshold)
             else:
-                res = check_image_sync(api_url, int(body["unit_id"]), img_path, threshold=threshold)
-            # Fetch heatmap_url for live preview if inspection_id exists
+                res = check_bytes_sync(api_url, int(body["unit_id"]), fname, raw, threshold=threshold)
             if res.get("inspection_id"):
                 try:
                     import requests
@@ -398,7 +447,7 @@ class SimHandler(BaseHTTPRequestHandler):
             self._send_json(200, res)
         except Exception as exc:
             self._send_json(500, {
-                "file": img_path.name,
+                "file": Path(member).name,
                 "passed": False,
                 "decision": f"ERROR: {exc}",
                 "score": 0,

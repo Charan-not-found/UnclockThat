@@ -73,6 +73,10 @@ export interface InspectionDetail {
   severity: string
   image_path: string
   image_url?: string | null
+  model_used?: string | null
+  module_results?: ModuleScanResult[]
+  weighted_outputs?: WeightedOutput[]
+  distinct_outputs?: InspectionRunResult['distinct_outputs']
   requires_review: boolean
   review_note?: string
   anomaly_results: AnomalyResult[]

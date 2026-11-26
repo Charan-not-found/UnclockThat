@@ -100,11 +100,16 @@ export default function InspectionDetailPage() {
           </p>
           <p className="text-xs text-slate-400 mt-0.5">{new Date(detail.date).toLocaleString()}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <StatusBadge value={detail.status} size="md" />
           <StatusBadge value={detail.severity} size="md" />
-          <span className="text-2xl font-semibold tabular-nums text-slate-800">{detail.quality_score}</span>
-          <span className="text-xs text-slate-400">score</span>
+          {detail.model_used && (
+            <span className="text-xs px-2 py-0.5 rounded popup-subtle border" style={{ borderColor: 'var(--color-border)' }}>
+              {detail.model_used}
+            </span>
+          )}
+          <span className="text-2xl font-semibold tabular-nums">{detail.quality_score}</span>
+          <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>score</span>
         </div>
       </div>
 
@@ -231,6 +236,129 @@ export default function InspectionDetailPage() {
               </div>
             )}
           </section>
+
+          {/* Weighted Average & Distinct Outputs (Test Sample parity) */}
+          {detail.weighted_outputs && detail.weighted_outputs.length > 0 && (
+            <section className="card p-4 space-y-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
+                Weighted Average Outputs (Shared)
+              </h2>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {detail.weighted_outputs.map(wo => (
+                  <div key={wo.output_key} className="rounded border p-2.5 popup-subtle" style={{ borderColor: 'var(--color-border)' }}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium">{wo.label}</span>
+                      <span className="text-base font-semibold tabular-nums">{wo.weighted_value.toFixed(3)}</span>
+                    </div>
+                    <div className="mt-1.5 space-y-0.5">
+                      {wo.weights_used.map(wu => (
+                        <div key={wu.module_id} className="flex items-center justify-between text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+                          <span className="truncate max-w-[160px]">{wu.module_name}</span>
+                          <span className="tabular-nums">
+                            val {wu.value.toFixed(3)} × {(wu.ratio * 100).toFixed(0)}% (w:{wu.weight})
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {detail.distinct_outputs && (
+            (detail.distinct_outputs.unique_module_outputs?.length ?? 0) > 0 ||
+            (detail.distinct_outputs.defect_classes?.length ?? 0) > 0
+          ) && (
+            <section className="card p-4 space-y-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
+                Distinct &amp; Per-Module Outputs (As-Is)
+              </h2>
+              {(detail.distinct_outputs.defect_classes?.length ?? 0) > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span style={{ color: 'var(--color-text-secondary)' }}>Detected classes:</span>
+                  {detail.distinct_outputs.defect_classes!.map(cls => (
+                    <span key={cls} className="rounded bg-amber-500/15 text-amber-400 px-2 py-0.5 font-medium">{cls}</span>
+                  ))}
+                </div>
+              )}
+              {(detail.distinct_outputs.unique_module_outputs?.length ?? 0) > 0 && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {detail.distinct_outputs.unique_module_outputs!.map((uo, idx) => (
+                    <div key={`${uo.module_id}-${uo.output_key}-${idx}`} className="flex items-center justify-between rounded border px-2.5 py-1.5 text-xs popup-subtle" style={{ borderColor: 'var(--color-border)' }}>
+                      <div>
+                        <span className="font-medium">{uo.module_name}</span>
+                        <span className="ml-1.5 text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>({uo.output_key})</span>
+                      </div>
+                      <span className="font-medium">{uo.summary}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {detail.module_results && detail.module_results.length > 0 && (
+            <section className="card p-4 space-y-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--color-text-secondary)' }}>
+                Individual Module Results ({detail.module_results.length})
+              </h2>
+              <div className="grid gap-3 md:grid-cols-2">
+                {detail.module_results.map(mr => (
+                  <div key={mr.module_id} className="rounded-md border p-3 space-y-2 popup-subtle" style={{ borderColor: 'var(--color-border)' }}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-semibold">{mr.module_name}</div>
+                        <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                          {mr.model_display_name}
+                        </div>
+                      </div>
+                      <span className="rounded px-2 py-0.5 text-[11px] font-medium bg-blue-500/15 text-blue-400 tabular-nums">
+                        Weight {mr.weight}/100 ({Math.round(mr.weight_ratio * 100)}%)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <div style={{ color: 'var(--color-text-secondary)' }}>Anomaly</div>
+                        <div className="font-semibold tabular-nums">{mr.anomaly_score.toFixed(3)}</div>
+                      </div>
+                      <div>
+                        <div style={{ color: 'var(--color-text-secondary)' }}>Confidence</div>
+                        <div className="font-semibold tabular-nums">{Math.round(mr.confidence_score * 100)}%</div>
+                      </div>
+                      <div>
+                        <div style={{ color: 'var(--color-text-secondary)' }}>Latency</div>
+                        <div className="font-semibold tabular-nums">
+                          {mr.processing_time_ms != null ? `${Math.round(mr.processing_time_ms)} ms` : '—'}
+                        </div>
+                      </div>
+                    </div>
+                    {mr.heatmap_url && (
+                      <img
+                        src={`${API}${mr.heatmap_url}`}
+                        alt={`${mr.module_name} overlay`}
+                        className="aspect-video w-full rounded object-contain bg-black/20"
+                      />
+                    )}
+                    {mr.defects.length > 0 ? (
+                      <div className="text-xs space-y-1">
+                        {mr.defects.map((d, idx) => (
+                          <div key={idx} className="flex items-center justify-between">
+                            <span>{d.type}</span>
+                            <StatusBadge value={d.severity} />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                        No defects flagged by this module.
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* Per-stage anomaly results */}
           <section className="card p-4">

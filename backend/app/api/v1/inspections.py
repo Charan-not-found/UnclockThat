@@ -105,6 +105,10 @@ class InspectionDetailOut(BaseModel):
     severity: str          # top-level severity label
     image_path: str
     image_url: Optional[str] = None
+    model_used: Optional[str] = None
+    module_results: list["ModuleScanResultOut"] = []
+    weighted_outputs: list["WeightedOutputOut"] = []
+    distinct_outputs: dict[str, Any] = {}
     requires_review: bool
     review_note: Optional[str]
     anomaly_results: list[AnomalyResultOut]
@@ -320,6 +324,21 @@ def _build_detail(db: Session, inspection_id: int) -> Optional[InspectionDetailO
     else:
         img_url = None
 
+    report_file = BASE_DIR / "outputs" / "reports" / f"INS-{rec.id}.json"
+    report_data: dict[str, Any] = {}
+    if report_file.is_file():
+        try:
+            report_data = json.loads(report_file.read_text(encoding="utf-8"))
+        except Exception:
+            report_data = {}
+
+    model_used = report_data.get("model_used") or (
+        " + ".join(a.model_name for a in anomaly_outs) if anomaly_outs else "OpenCV Heuristic"
+    )
+    mod_res = [ModuleScanResultOut(**m) for m in report_data.get("module_results", [])]
+    w_outs = [WeightedOutputOut(**w) for w in report_data.get("weighted_outputs", [])]
+    d_outs = report_data.get("distinct_outputs", {}) or {}
+
     decision = rec.overall_decision or "PASS"
     return InspectionDetailOut(
         id=f"INS-{rec.id}",
@@ -335,6 +354,10 @@ def _build_detail(db: Session, inspection_id: int) -> Optional[InspectionDetailO
         severity=top_sev,
         image_path=rec.image_file_path,
         image_url=img_url,
+        model_used=model_used,
+        module_results=mod_res,
+        weighted_outputs=w_outs,
+        distinct_outputs=d_outs,
         requires_review=requires_review,
         review_note=review_note,
         anomaly_results=anomaly_outs,
