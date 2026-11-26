@@ -9,17 +9,22 @@ import StatusBadge from '../../components/common/StatusBadge'
 import PageHelpLegend from '../../components/common/PageHelpLegend'
 import { LoadingState, ErrorState, EmptyState } from '../../components/common/LoadingState'
 import { listModels, toggleModel } from '../../services/modelService'
-import type { ModelInfo } from '../../types'
+import { getModelCatalogue } from '../../services/scannerUnitService'
+import type { ModelCapability, ModelInfo } from '../../types'
 
 const FAMILY_LABEL: Record<string, string> = {
   efficientad:      'EfficientAD (Anomaly)',
   yolo_seg:         'YOLO-Seg (Localisation)',
   patchcore:        'PatchCore (Anomaly)',
+  dinomaly:         'Dinomaly (ViT Anomaly)',
+  anomalydino:      'AnomalyDINO (Few-Shot ViT)',
+  omniposead:       'OmniPoseAD (Pose-Agnostic)',
   mobilenet:        'MobileNet (Classification)',
   opencv_heuristic: 'OpenCV Heuristic (Prototype)',
 }
 
 export default function Models() {
+  const [catalogue, setCatalogue] = useState<ModelCapability[]>([])
   const [models, setModels] = useState<ModelInfo[]>()
   const [err, setErr] = useState(false)
   const [toggling, setToggling] = useState<string>()
@@ -27,7 +32,12 @@ export default function Models() {
   const load = () => {
     setErr(false)
     setModels(undefined)
-    listModels().then(setModels).catch(() => setErr(true))
+    Promise.all([getModelCatalogue(), listModels()])
+      .then(([cat, regs]) => {
+        setCatalogue(cat)
+        setModels(regs)
+      })
+      .catch(() => setErr(true))
   }
 
   useEffect(load, [])
@@ -47,6 +57,12 @@ export default function Models() {
   if (!models && !err) return <LoadingState message="Loading model registry…" />
   if (err) return <ErrorState message="Failed to load model registry" onRetry={load} />
 
+  const enabledCatalogue = catalogue.filter(
+    c => c.integration_state !== 'disabled_by_admin' && c.is_enabled !== false,
+  )
+  const enabledFamilies = new Set(enabledCatalogue.map(c => c.model_family))
+  const visibleModels = models?.filter(m => enabledFamilies.size === 0 || enabledFamilies.has(m.model_family))
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3 page-header">
@@ -55,7 +71,7 @@ export default function Models() {
             <h1>AI Models</h1>
             <PageHelpLegend
               title="AI Models"
-              summary="Lists cloned per-module models and seeded base models with live on-disk weight verification."
+              summary="Lists enabled base models and cloned per-module models with live on-disk weight verification."
               items={[
                 { label: 'Ready', badge: 'Ready', description: 'Model is active and available for inspection.' },
                 { label: 'Disabled', badge: 'Disabled', description: 'Model is inactive until trained or manually enabled.' },
@@ -64,10 +80,68 @@ export default function Models() {
               ]}
             />
           </div>
-          <p>{models?.length ?? 0} model configuration{models?.length !== 1 ? 's' : ''} registered.</p>
+          <p>
+            {enabledCatalogue.length} enabled base model{enabledCatalogue.length !== 1 ? 's' : ''} · {visibleModels?.length ?? 0} custom/registered module model{visibleModels?.length !== 1 ? 's' : ''}.
+          </p>
         </div>
         <Button variant="ghost" size="sm" onClick={load}><RefreshCw size={14} />Refresh</Button>
       </div>
+
+      {/* Base Model Library (enabled models from catalogue) */}
+      <section className="card">
+        <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
+          <h2 className="font-medium text-sm">Base AI Model Library ({enabledCatalogue.length})</h2>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+            Showing enabled models only. Manage model visibility in <a href="/settings" className="text-blue-500 hover:underline">Settings</a>.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Family</th>
+                <th>Capability &amp; Speed</th>
+                <th>Paradigm</th>
+                <th>Status</th>
+                <th>Base Weights</th>
+              </tr>
+            </thead>
+            <tbody>
+              {enabledCatalogue.map(c => (
+                <tr key={c.model_key}>
+                  <td className="font-medium">{c.display_name}</td>
+                  <td className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                    {FAMILY_LABEL[c.model_family] ?? c.model_family}
+                  </td>
+                  <td className="text-xs max-w-md" style={{ color: 'var(--color-text-secondary)' }}>
+                    {c.task}
+                  </td>
+                  <td className="font-mono text-xs">{c.training_paradigm}</td>
+                  <td>
+                    <StatusBadge
+                      value={
+                        c.integration_state === 'disabled_by_admin'
+                          ? 'Disabled'
+                          : c.ready_for_inference
+                          ? 'Ready'
+                          : 'Configured'
+                      }
+                    />
+                  </td>
+                  <td className="text-xs">
+                    {c.pretrained_present ? (
+                      <span className="text-green-600 font-medium">✓ Present</span>
+                    ) : (
+                      <span className="text-amber-500 font-medium">Needs setup</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {/* Model readiness summary */}
       <div className="card px-4 py-3 bg-blue-50 border-blue-200">
@@ -107,7 +181,7 @@ export default function Models() {
                 </tr>
               </thead>
               <tbody>
-                {models?.map(m => (
+                {visibleModels?.map(m => (
                   <tr key={m.id}>
                     <td className="font-medium">{m.name}</td>
                     <td className="text-slate-500 text-xs">{FAMILY_LABEL[m.model_family] ?? m.model_family}</td>

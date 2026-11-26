@@ -87,6 +87,7 @@ class AnomalyResultOut(BaseModel):
     severity: str
     defects: list[DefectOut]
     heatmap_path: Optional[str] = None
+    heatmap_url: Optional[str] = None
     processing_time_ms: Optional[float] = None
 
 
@@ -103,6 +104,7 @@ class InspectionDetailOut(BaseModel):
     quality_score: int
     severity: str          # top-level severity label
     image_path: str
+    image_url: Optional[str] = None
     requires_review: bool
     review_note: Optional[str]
     anomaly_results: list[AnomalyResultOut]
@@ -147,6 +149,7 @@ class WeightedOutputOut(BaseModel):
 
 class InspectionRunOut(BaseModel):
     inspectionId: str
+    passed: bool
     quality_score: int
     status: str
     overall_decision: str
@@ -293,6 +296,7 @@ def _build_detail(db: Session, inspection_id: int) -> Optional[InspectionDetailO
             if mc:
                 model_name = mc.name
 
+        heatmap_url = f"/results/{Path(ar.heatmap_file_path).name}" if ar.heatmap_file_path else None
         anomaly_outs.append(AnomalyResultOut(
             id=str(ar.id),
             model_name=model_name,
@@ -302,8 +306,19 @@ def _build_detail(db: Session, inspection_id: int) -> Optional[InspectionDetailO
             severity=_anomaly_to_severity(ar.anomaly_score),
             defects=defects_out,
             heatmap_path=ar.heatmap_file_path,
+            heatmap_url=heatmap_url,
             processing_time_ms=ar.processing_time_ms,
         ))
+
+    norm_img_path = (rec.image_file_path or "").replace("\\", "/")
+    if "/uploads/" in norm_img_path:
+        img_url = "/uploads/" + norm_img_path.split("/uploads/", 1)[1]
+    elif norm_img_path.startswith("uploads/"):
+        img_url = "/" + norm_img_path
+    elif norm_img_path:
+        img_url = f"/uploads/{Path(norm_img_path).name}"
+    else:
+        img_url = None
 
     decision = rec.overall_decision or "PASS"
     return InspectionDetailOut(
@@ -319,6 +334,7 @@ def _build_detail(db: Session, inspection_id: int) -> Optional[InspectionDetailO
         quality_score=int(round((rec.quality_score or 0.9) * 100)),
         severity=top_sev,
         image_path=rec.image_file_path,
+        image_url=img_url,
         requires_review=requires_review,
         review_note=review_note,
         anomaly_results=anomaly_outs,
@@ -601,6 +617,7 @@ async def run_inspection(
     )
     return InspectionRunOut(
         inspectionId=agg["inspectionId"],
+        passed=(agg["overall_decision"] == "PASS"),
         quality_score=agg["quality_score"],
         status=agg["status"],
         overall_decision=agg["overall_decision"],

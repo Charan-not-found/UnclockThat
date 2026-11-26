@@ -458,6 +458,7 @@ def get_batch_results(
             "original_filename": j.original_filename,
             "execution_status": j.status,
             "inspection_id": f"INS-{j.inspection_id}" if j.inspection_id else None,
+            "passed": (dec == "PASS") if dec is not None else None,
             "overall_decision": dec,
             "quality_score": int(round(insp.quality_score * 100)) if (insp and insp.quality_score is not None) else None,
             "severity": sev,

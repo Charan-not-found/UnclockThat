@@ -23,6 +23,7 @@ export default function InspectionDetailPage() {
   const [reviewNote, setReviewNote] = useState('')
   const [reviewing, setReviewing] = useState(false)
   const [reviewed, setReviewed] = useState(false)
+  const [selectedStageId, setSelectedStageId] = useState<string>('auto')
 
   useEffect(() => {
     if (!id) return
@@ -54,7 +55,30 @@ export default function InspectionDetailPage() {
   if (err || !detail) return <ErrorState message="Inspection not found or could not be loaded." />
 
   const hasAnomalyResults = detail.anomaly_results.length > 0
-  const topResult = hasAnomalyResults ? detail.anomaly_results[0] : null
+  const allDefects = detail.anomaly_results.flatMap(ar => ar.defects)
+
+  const API = (import.meta.env.VITE_API_URL as string | undefined)?.replace('/api/v1', '') ?? 'http://localhost:8000'
+  const resolveImageUrl = (): string | null => {
+    if (detail.image_url) return `${API}${detail.image_url}`
+    const norm = (detail.image_path || '').replace(/\\/g, '/')
+    if (!norm) return null
+    if (norm.includes('/uploads/')) return `${API}/uploads/${norm.split('/uploads/')[1]}`
+    const filename = norm.split('/').pop()
+    return filename ? `${API}/uploads/${filename}` : null
+  }
+  const imgUrl = resolveImageUrl()
+  const heatmapStages = detail.anomaly_results.filter(ar => ar.heatmap_url || ar.heatmap_path)
+  const bestStage = [...heatmapStages].sort(
+    (a, b) => (b.defects.length - a.defects.length) || (b.anomaly_score - a.anomaly_score),
+  )[0]
+  const primaryAr =
+    selectedStageId === 'auto'
+      ? bestStage
+      : (heatmapStages.find(ar => ar.id === selectedStageId) ?? bestStage)
+  const primaryHeatmapRel =
+    primaryAr?.heatmap_url ??
+    (primaryAr?.heatmap_path ? `/results/${primaryAr.heatmap_path.split(/[\\/]/).pop()}` : null)
+  const scannedImgUrl = primaryHeatmapRel ? `${API}${primaryHeatmapRel}` : imgUrl
 
   return (
     <div className="space-y-5">
@@ -88,58 +112,124 @@ export default function InspectionDetailPage() {
         {/* Evidence viewer */}
         <div className="space-y-3">
           <section className="card p-4">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <h2 className="font-medium text-sm">Evidence viewer</h2>
-              <button
-                onClick={() => setShowOverlay(o => !o)}
-                className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800"
-                aria-pressed={showOverlay}
-              >
-                {showOverlay ? <EyeOff size={14} /> : <Eye size={14} />}
-                {showOverlay ? 'Hide overlays' : 'Show overlays'}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {heatmapStages.length > 1 && (
+                  <select
+                    className="px-2 py-1 text-xs input-field"
+                    value={selectedStageId}
+                    onChange={e => setSelectedStageId(e.target.value)}
+                    aria-label="Select module heatmap"
+                  >
+                    <option value="auto">Heatmap: Highest Anomaly ({bestStage?.model_name})</option>
+                    {heatmapStages.map(st => (
+                      <option key={st.id} value={st.id}>
+                        {st.model_name} (score {st.anomaly_score.toFixed(2)})
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={() => setShowOverlay(o => !o)}
+                  className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800"
+                  aria-pressed={showOverlay}
+                >
+                  {showOverlay ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showOverlay ? 'Hide overlays' : 'Show overlays'}
+                </button>
+              </div>
             </div>
 
-            <div className="relative overflow-hidden rounded-md bg-slate-100 aspect-video">
-              {/* We serve the uploaded image via storage/ path — in dev the backend serves it */}
-              {/* Try to serve the uploaded image via /uploads/<filename> static route */}
-              {(() => {
-                const filename = detail.image_path.split(/[\\/]/).pop()
-                const API = (import.meta.env.VITE_API_URL as string | undefined)?.replace('/api/v1', '') ?? 'http://localhost:8000'
-                const imgUrl = filename ? `${API}/uploads/${filename}` : null
-                return imgUrl ? (
-                  <img
-                    src={imgUrl}
-                    alt={`Inspection evidence for ${detail.id}`}
-                    className="h-full w-full object-contain"
-                    onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full text-slate-400 text-sm">
-                    <p>Image path unavailable</p>
-                  </div>
-                )
-              })()}
-
-              {/* Defect overlays */}
-              {showOverlay && topResult && topResult.defects.map((d, i) => (
-                <div key={i}>
-                  <div className="absolute border-2 border-red-500 rounded" style={{
-                    left: `${d.box.x}%`, top: `${d.box.y}%`,
-                    width: `${d.box.w}%`, height: `${d.box.h}%`,
-                  }}>
-                    <span className="absolute -top-5 left-0 text-xs bg-red-600 text-white px-1 rounded whitespace-nowrap">
-                      {d.severity} · {Math.round(d.confidence * 100)}%
-                    </span>
-                  </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {/* Unscanned (Original) */}
+              <figure>
+                <div className="relative overflow-hidden rounded-md popup-subtle aspect-video">
+                  {imgUrl ? (
+                    <img
+                      key={`orig-${detail.id}-${imgUrl}`}
+                      src={imgUrl}
+                      alt={`Unscanned original for ${detail.id}`}
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-slate-400 text-sm">
+                      <p>Original image unavailable</p>
+                    </div>
+                  )}
                 </div>
-              ))}
+                <figcaption className="mt-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  Unscanned (Original)
+                </figcaption>
+              </figure>
+
+              {/* Scanned (Defects Highlighted) */}
+              <figure>
+                <div className="relative overflow-hidden rounded-md popup-subtle aspect-video">
+                  {scannedImgUrl ? (
+                    <img
+                      key={`scan-${detail.id}-${showOverlay ? scannedImgUrl : imgUrl}`}
+                      src={showOverlay ? scannedImgUrl : (imgUrl ?? scannedImgUrl)}
+                      alt={`Scanned defects highlighted for ${detail.id}`}
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-slate-400 text-sm">
+                      <p>Scanned image unavailable</p>
+                    </div>
+                  )}
+
+                  {/* Defect bounding-box overlays */}
+                  {showOverlay && allDefects.map((d, i) => (
+                    <div key={i}>
+                      <div className="absolute border-2 border-red-500 rounded" style={{
+                        left: `${d.box.x}%`, top: `${d.box.y}%`,
+                        width: `${d.box.w}%`, height: `${d.box.h}%`,
+                      }}>
+                        <span className="absolute -top-5 left-0 text-xs bg-red-600 text-white px-1 rounded whitespace-nowrap">
+                          {d.type} · {d.severity} · {Math.round(d.confidence * 100)}%
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <figcaption className="mt-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  Scanned (Defects Highlighted){!showOverlay ? ' — Overlays hidden' : ''}
+                </figcaption>
+              </figure>
             </div>
 
-            <p className="mt-1 text-xs text-slate-400">
-              Overlay source: OpenCV heuristic bounding boxes stored in anomaly_results table.
-              {!showOverlay && ' Overlays hidden.'}
-            </p>
+            {allDefects.length > 0 && (
+              <div className="mt-4 overflow-x-auto border-t pt-3" style={{ borderColor: 'var(--color-border)' }}>
+                <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+                  Detected Defects ({allDefects.length})
+                </div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Defect Type</th>
+                      <th>Severity</th>
+                      <th className="tabular-nums">Confidence</th>
+                      <th className="tabular-nums">Anomaly Score</th>
+                      <th className="tabular-nums">Region (x, y, w, h)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allDefects.map((d, idx) => (
+                      <tr key={idx}>
+                        <td className="font-medium">{d.type}</td>
+                        <td><StatusBadge value={d.severity} /></td>
+                        <td className="tabular-nums">{Math.round(d.confidence * 100)}%</td>
+                        <td className="tabular-nums">{d.anomalyScore.toFixed(3)}</td>
+                        <td className="font-mono text-xs tabular-nums">
+                          {d.box.x}%, {d.box.y}%, {d.box.w}% × {d.box.h}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
 
           {/* Per-stage anomaly results */}
@@ -174,6 +264,16 @@ export default function InspectionDetailPage() {
                         </span>
                       </div>
                     </div>
+
+                    {ar.heatmap_url && (
+                      <div className="mt-2">
+                        <img
+                          src={`${API}${ar.heatmap_url}`}
+                          alt={`${ar.model_name} defect overlay`}
+                          className="aspect-video max-h-48 w-full rounded object-contain popup-subtle"
+                        />
+                      </div>
+                    )}
 
                     {ar.defects.length > 0 && (
                       <table className="mt-2 text-xs">

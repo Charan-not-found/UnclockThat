@@ -41,6 +41,7 @@ export interface AnomalyResult {
   severity: string
   defects: Defect[]
   heatmap_path?: string
+  heatmap_url?: string | null
   processing_time_ms?: number
 }
 
@@ -71,6 +72,7 @@ export interface InspectionDetail {
   quality_score: number
   severity: string
   image_path: string
+  image_url?: string | null
   requires_review: boolean
   review_note?: string
   anomaly_results: AnomalyResult[]

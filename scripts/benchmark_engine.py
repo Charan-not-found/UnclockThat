@@ -77,7 +77,15 @@ def run_benchmark(num_images: int = 100) -> None:
             f"p50={mt['p50_latency_ms']}ms, p95={mt['p95_latency_ms']}ms, ram_mb={mt['ram_mb']}"
         )
     finally:
+        from sqlalchemy import select
+        from backend.app.database.models.inspection import InspectionRecord
+        from backend.app.database.models.pipeline import PipelineConfig
         if unit_id is not None:
+            for r in db.scalars(select(InspectionRecord).where(InspectionRecord.scanner_unit_id == unit_id)).all():
+                db.delete(r)
+            for p in db.scalars(select(PipelineConfig).where(PipelineConfig.name == "Benchmark Unit")).all():
+                db.delete(p)
+            db.commit()
             delete_scanner_unit(unit_id, db=db)
         if prev_toggle:
             prev_toggle.is_enabled = prev_enabled

@@ -115,11 +115,18 @@ class EfficientAdAdapter:
         amap = out.anomaly_map.squeeze().detach().cpu().numpy()
         amap_min, amap_max = float(amap.min()), float(amap.max())
         if amap_max > amap_min:
-            amap_norm = (amap - amap_min) / (amap_max - amap_min)
+            rel_map = (amap - amap_min) / (amap_max - amap_min)
         else:
-            amap_norm = np.zeros_like(amap, dtype=np.float32)
+            rel_map = np.zeros_like(amap, dtype=np.float32)
 
-        amap_full = cv2.resize(amap_norm.astype(np.float32), (w_orig, h_orig), interpolation=cv2.INTER_LINEAR)
+        # Scale heatmap intensity by the actual image anomaly_score so normal images stay cool
+        # and only genuinely anomalous regions light up in warm/red colors.
+        if 0.0 <= amap_min and amap_max <= 1.0 and pred_score_t is not None and amap_max > 0.25:
+            amap_norm = np.clip(amap, 0.0, 1.0).astype(np.float32)
+        else:
+            amap_norm = (rel_map * min(1.0, max(0.35, anomaly_score))).astype(np.float32)
+
+        amap_full = cv2.resize(amap_norm, (w_orig, h_orig), interpolation=cv2.INTER_LINEAR)
 
         # Save heatmap overlay to storage/inspection_results/
         settings = get_settings()
