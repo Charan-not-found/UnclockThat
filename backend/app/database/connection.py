@@ -45,8 +45,10 @@ def ensure_runtime_dirs() -> None:
         settings.data_root / sub
         for sub in ("datasets", "training", "false_positives", "raw")
     ] + [
-        settings.artifact_root / sub
-        for sub in ("pretrained", "trained", "checkpoints")
+        settings.artifact_root / "checkpoints"
+    ] + [
+        settings.models_root / sub
+        for sub in ("base", "custom")
     ] + [
         settings.storage_root / sub
         for sub in ("uploads", "inspection_results", "temporary")

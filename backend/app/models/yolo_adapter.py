@@ -23,7 +23,7 @@ class YoloSegAdapter:
     @classmethod
     def default_weights_path(cls) -> Path:
         settings = get_settings()
-        return settings.artifact_root / "pretrained" / "yolo11n-seg.pt"
+        return settings.base_models_dir / "yolo11n-seg.pt"
 
     @classmethod
     def is_available(cls, weights_path: Optional[Path] = None) -> bool:

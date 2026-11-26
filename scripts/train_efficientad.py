@@ -28,7 +28,7 @@ from anomalib.models.image.efficient_ad.lightning_model import (  # noqa: E402
 
 def _prepare_local_teacher_weights() -> None:
     """Copy local pretrained_teacher_small.pth into anomalib's weights cache."""
-    local_weights = ROOT / "artifacts" / "pretrained" / "pretrained_teacher_small.pth"
+    local_weights = ROOT / "models" / "base" / "pretrained_teacher_small.pth"
     if not local_weights.is_file():
         raise FileNotFoundError(f"Missing pretrained weights: {local_weights}")
 
@@ -144,7 +144,7 @@ def main() -> None:
             metrics[k] = round(float(v), 4) if isinstance(v, (int, float)) else v
     print("Test metrics:", metrics)
 
-    trained_dir = ROOT / "artifacts" / "trained"
+    trained_dir = ROOT / "models" / "custom"
     trained_dir.mkdir(parents=True, exist_ok=True)
     final_ckpt = trained_dir / "efficientad_casting.ckpt"
 

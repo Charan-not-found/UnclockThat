@@ -5,7 +5,7 @@ import os
 import sys
 import shutil
 
-dest = "artifacts/pretrained"
+dest = "models/base"
 os.makedirs(dest, exist_ok=True)
 
 # ── 1. EfficientAD pretrained teacher weights (from anomalib) ─────────────────

@@ -25,7 +25,7 @@ class EfficientAdAdapter:
     @classmethod
     def default_checkpoint_path(cls) -> Path:
         settings = get_settings()
-        return settings.artifact_root / "trained" / "efficientad_casting.ckpt"
+        return settings.custom_models_dir / "efficientad_casting.ckpt"
 
     @classmethod
     def is_available(cls, ckpt_path: Optional[Path] = None) -> bool:

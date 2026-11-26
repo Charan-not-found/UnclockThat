@@ -31,9 +31,12 @@ data/training/*
 data/false_positives/*
 !data/**/.gitkeep
 
+# Model folders (base & custom)
+models/base/*
+models/custom/*
+!models/**/.gitkeep
+
 # Generated artifacts
-artifacts/pretrained/*
-artifacts/trained/*
 artifacts/checkpoints/*
 !artifacts/**/.gitkeep
 

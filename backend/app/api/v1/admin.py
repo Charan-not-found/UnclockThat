@@ -49,7 +49,7 @@ def seed_database(db: Session = Depends(get_db)) -> SeedResult:
             "name": "EfficientAD-Small (Prototype)",
             "model_family": "efficientad",
             "version": "1.0.0",
-            "weights_file_path": os.path.join("artifacts", "pretrained", "pretrained_teacher_small.pth"),
+            "weights_file_path": os.path.join("models", "base", "pretrained_teacher_small.pth"),
             "dataset_dir_path": os.path.join("data", "train"),
             "hyperparameters_json": {
                 "task": "Anomaly detection",
@@ -63,7 +63,7 @@ def seed_database(db: Session = Depends(get_db)) -> SeedResult:
             "name": "EfficientAD-Medium (Prototype)",
             "model_family": "efficientad",
             "version": "1.0.0",
-            "weights_file_path": os.path.join("artifacts", "pretrained", "pretrained_teacher_medium.pth"),
+            "weights_file_path": os.path.join("models", "base", "pretrained_teacher_medium.pth"),
             "dataset_dir_path": os.path.join("data", "train"),
             "hyperparameters_json": {
                 "task": "Anomaly detection",
@@ -77,7 +77,7 @@ def seed_database(db: Session = Depends(get_db)) -> SeedResult:
             "name": "YOLO11n-Seg (Prototype)",
             "model_family": "yolo_seg",
             "version": "11.0.0",
-            "weights_file_path": os.path.join("artifacts", "pretrained", "yolo11n-seg.pt"),
+            "weights_file_path": os.path.join("models", "base", "yolo11n-seg.pt"),
             "dataset_dir_path": os.path.join("data", "train"),
             "hyperparameters_json": {
                 "task": "Segmentation / Localization",

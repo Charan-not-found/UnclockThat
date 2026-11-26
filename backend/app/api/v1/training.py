@@ -139,7 +139,7 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
         if run.model_key == "anomalydino":
             from backend.app.models.anomalydino_adapter import AnomalyDINOAdapter
 
-            trained_dir = BASE_DIR / "artifacts" / "trained"
+            trained_dir = BASE_DIR / "models" / "custom"
             trained_dir.mkdir(parents=True, exist_ok=True)
             if run.module_id:
                 mod_obj = db.get(AnalysisModule, run.module_id)
@@ -188,7 +188,7 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
         if run.model_key == "omniposead":
             from backend.app.models.omnipose_adapter import OmniPoseAdapter
 
-            trained_dir = BASE_DIR / "artifacts" / "trained"
+            trained_dir = BASE_DIR / "models" / "custom"
             trained_dir.mkdir(parents=True, exist_ok=True)
             if run.module_id:
                 mod_obj = db.get(AnalysisModule, run.module_id)
@@ -248,7 +248,7 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
             model_size = "medium" if run.model_key == "efficientad_medium" else "small"
             teacher_filename = f"pretrained_teacher_{model_size}.pth"
             _update_progress(db, job_id, 12, f"Preparing {teacher_filename} on {device_label}", f"Using {device_label}. Checking local {teacher_filename}...")
-            local_weights = BASE_DIR / "artifacts" / "pretrained" / teacher_filename
+            local_weights = BASE_DIR / "models" / "base" / teacher_filename
             if not local_weights.is_file():
                 raise FileNotFoundError(f"Missing pretrained weights at {local_weights}")
             target_dir = get_pretrained_weights_dir() / "efficientad_pretrained_weights"
@@ -331,7 +331,7 @@ def _run_efficientad_job(job_id: int, release_lock: bool = True) -> None:
             metrics["evaluation_note"] = f"Normal-only dataset ({test_exc})"
 
         _update_progress(db, job_id, 95, "Saving trained checkpoint", "Exporting module checkpoint...")
-        trained_dir = BASE_DIR / "artifacts" / "trained"
+        trained_dir = BASE_DIR / "models" / "custom"
         trained_dir.mkdir(parents=True, exist_ok=True)
         if run.module_id:
             mod_obj = db.get(AnalysisModule, run.module_id)

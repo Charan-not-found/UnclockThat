@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PRETRAINED_DIR = ROOT / "artifacts" / "pretrained"
+PRETRAINED_DIR = ROOT / "models" / "base"
 
 
 def _download_yolo(filename: str, fallback_url: str) -> bool:

@@ -470,7 +470,7 @@ def _run_single_module(
     defects: list[DefectOut] = []
 
     if model_key in ("yolo11n_seg", "yolo11m_seg"):
-        default_yolo = BASE_DIR / "artifacts" / "pretrained" / (
+        default_yolo = BASE_DIR / "models" / "base" / (
             "yolo11m-seg.pt" if model_key == "yolo11m_seg" else "yolo11n-seg.pt"
         )
         w_path = cloned_ckpt_path or default_yolo

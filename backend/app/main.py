@@ -55,7 +55,7 @@ def reset_brand_new() -> None:
         settings.data_root / "datasets",
         settings.data_root / "training",
         settings.data_root / "false_positives",
-        settings.artifact_root / "trained",
+        settings.custom_models_dir,
         settings.artifact_root / "checkpoints",
         BASE_DIR / "outputs" / "reports",
         BASE_DIR / "outputs" / "visualizations",

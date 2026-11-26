@@ -32,11 +32,11 @@ def _get_disabled_model_keys() -> set[str]:
 
 def get_model_catalogue() -> list[dict[str, Any]]:
     """Return capability manifests for all integrated AI models with live artifact & toggle checks."""
-    efficientad_ckpt = "artifacts/trained/efficientad_casting.ckpt"
-    efficientad_teacher_s = "artifacts/pretrained/pretrained_teacher_small.pth"
-    efficientad_teacher_m = "artifacts/pretrained/pretrained_teacher_medium.pth"
-    yolo_n_weights = "artifacts/pretrained/yolo11n-seg.pt"
-    yolo_m_weights = "artifacts/pretrained/yolo11m-seg.pt"
+    efficientad_ckpt = "models/custom/efficientad_casting.ckpt"
+    efficientad_teacher_s = "models/base/pretrained_teacher_small.pth"
+    efficientad_teacher_m = "models/base/pretrained_teacher_medium.pth"
+    yolo_n_weights = "models/base/yolo11n-seg.pt"
+    yolo_m_weights = "models/base/yolo11m-seg.pt"
 
     trained_efficientad = _file_exists(efficientad_ckpt)
     disabled_keys = _get_disabled_model_keys()

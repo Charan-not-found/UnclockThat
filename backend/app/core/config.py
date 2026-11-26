@@ -29,6 +29,9 @@ class Settings(BaseSettings):
 
     data_root: Path = BASE_DIR / "data"
     artifact_root: Path = BASE_DIR / "artifacts"
+    models_root: Path = BASE_DIR / "models"
+    base_models_dir: Path = BASE_DIR / "models" / "base"
+    custom_models_dir: Path = BASE_DIR / "models" / "custom"
     storage_root: Path = BASE_DIR / "storage"
 
     default_device: str = "auto"
